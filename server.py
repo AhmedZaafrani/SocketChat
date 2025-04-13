@@ -1,9 +1,10 @@
 import threading
 import socket
+import datetime
 
 server_socket = None
 clients = []
-lock = threading.Lock
+lock = threading.Lock()
 
 def ascolta_client(client, address):
     client.send("Inserisci il tuo nome: ".encode('utf-8'))
@@ -21,7 +22,6 @@ def ascolta_client(client, address):
                 if message == "closed connection":
                     break
                 messaggio_broadcast(f"{nome}: {message}", client)
-                print(f"{nome}: {message}")
 
         except Exception as e:
             print(f"eccezione nella gestione del client {client}. Info aggiuntive: {e}")
@@ -53,7 +53,39 @@ def start_server():
     server_socket.bind(("127.0.0.1", 12345))
     server_socket.listen(10)
 
+    listening_thread = threading.Thread(target=listen_for_client, )
+    listening_thread.daemon = True
+    listening_thread.start()
+
+    try:
+        while True:
+            cmd = input("Server command (quit per uscire - send per inviare un messaggio globale): ")
+            if cmd.lower() == "quit":
+                break
+            elif cmd == "send":
+                cmd = input("Inserire il messaggio da inviare: (exit per uscire dalla modalità invio messaggio globale): ")
+                if cmd == "exit":
+                    continue
+                else:
+                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    messaggio_broadcast(f"{timestamp} - Server: {cmd}", None)
+                    print(f"Invio riuscito!")
+
+
+    except KeyboardInterrupt:
+        pass
+
+    finally:
+        print("Server in chiusura...")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        messaggio_broadcast(f"{timestamp} - Messaggio globale: Server in chiusura...", None)
+        if server_socket:
+            server_socket.close()
+
 def messaggio_broadcast(message, sender_client):
+    with open("chat_log.txt", "a", encoding="utf-8") as log_file:
+        log_file.write(f"{message}\n")
+
     with lock:
         for client in clients:
             if client != sender_client:
@@ -69,7 +101,3 @@ def messaggio_broadcast(message, sender_client):
 
 if __name__ == "__main__":
     start_server()
-    listening_thread = threading.Thread(target=listen_for_client,)
-    listening_thread.daemon = True
-    listening_thread.start()
-
