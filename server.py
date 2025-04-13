@@ -6,14 +6,16 @@ server_socket = None
 clients = []
 lock = threading.Lock()
 
+
 def ascolta_client(client, address):
     client.send("Inserisci il tuo nome: ".encode('utf-8'))
     nome = client.recv(1024).decode('utf-8').strip()
 
     with lock:
         clients.append(client)
-        messaggio_broadcast(f"{nome} si è unito alla chat".encode('utf-8'), None)
-        print(f"{nome} - {address} - si è unito alla chat") # log
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        messaggio_broadcast(f"{timestamp} - {nome} si è unito alla chat".encode('utf-8'), None)
+        print(f"{nome} - {address} - si è unito alla chat")  # log
 
     while True:
         try:
@@ -21,7 +23,17 @@ def ascolta_client(client, address):
             if message:
                 if message == "closed connection":
                     break
-                messaggio_broadcast(f"{nome}: {message}", client)
+
+                # Assumendo che il client invii un messaggio nel formato "timestamp - testo"
+                # inserisco il nome dopo il timestamp
+                parts = message.split(" - ", 1)
+                if len(parts) == 2:
+                    timestamp, text = parts
+                    messaggio_broadcast(f"{timestamp} - {nome}: {text}", client)
+                else:
+                    # timestamp messo dal server nel caso il formato non sia quello atteso
+                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    messaggio_broadcast(f"{timestamp} - {nome}: {message}", client)
 
         except Exception as e:
             print(f"eccezione nella gestione del client {client}. Info aggiuntive: {e}")
