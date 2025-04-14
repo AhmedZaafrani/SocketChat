@@ -38,6 +38,7 @@ def login():
 
 
 def listen_to_server():
+    global client_socket
     global chatlog
     while True:
         try:
@@ -45,18 +46,24 @@ def listen_to_server():
             if not msg:
                 break
             with chatlog_lock:
-                chatlog += "\n" + msg  # Aggiunge il messaggio già formattato dal server
+                chatlog = chatlog + "\n" + msg
+                print("Update chatlog: ", chatlog)
+                dpg.set_value("chatlog_field", chatlog)  # <-- AGGIUNTA IMPORTANTE
         except Exception as e:
-            print(f"Errore di connessione: {e}")
-            break
+            print(f"Error in listen_to_server: {e}")
+            continue
 
 
 def send_msg():
     global client_socket, chatlog
-    msg = dpg.get_value("input_txt").strip()
-    if not msg:
-        return
-    client_socket.send(msg.encode("utf-8"))
+    msg = dpg.get_value("input_txt")
+    print(msg)
+    timestamp = str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    formatted_msg = timestamp + " - " + dpg.get_value("username") + ": " + msg
+    client_socket.send((timestamp + " - "+ msg).encode("utf-8"))
+    with chatlog_lock:
+        chatlog = chatlog + "\n" + formatted_msg
+        print("Updated chatlog after sending:", chatlog)
     dpg.set_value("input_txt", "")
 
 with dpg.window(label="Chat", tag="window"):
