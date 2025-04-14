@@ -2,7 +2,10 @@ import textwrap
 import threading
 import socket
 import datetime
+from string import whitespace
+
 import dearpygui.dearpygui as dpg
+from dearpygui.dearpygui import configure_item
 
 # DEFAULT_IP = "127.0.0.1"
 DEFAULT_PORT = "12345"
@@ -152,7 +155,7 @@ def center_items():
 
     # Aggiorna i componenti della chat
     chat_width = viewport_width - (SPACING * 2)  # Margine ai lati
-    chat_height = viewport_height - 180  # Spazio per input e altri elementi
+    chat_height = viewport_height - 180  # Spazio per inp e altri elementi
 
     dpg.set_item_width("chatlog_field", chat_width)
     dpg.set_item_height("chatlog_field", chat_height)
