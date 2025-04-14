@@ -3,11 +3,11 @@ import socket
 import datetime
 import json
 import os
-from main import SERVER_IP, SERVER_PORT, USERS_FILE, CHAT_LOG_FILE, MAX_CONNECTIONS, BUFFER_SIZE
 
 server_socket = None
 clients = []
 lock = threading.Lock()
+
 
 
 def load_users():
@@ -127,7 +127,7 @@ def listen_for_clients():
 
 
 def messaggio_broadcast(message, sender_client):
-    with open(CHAT_LOG_FILE, "a", encoding="utf-8") as log_file:
+    with open("chat_log.txt", "a", encoding="utf-8") as log_file:
         log_file.write(f"{message}\n")
 
     with lock:
@@ -145,14 +145,15 @@ def messaggio_broadcast(message, sender_client):
 def start_server():
     global server_socket
 
+    # Crea il file users.json se non esiste
     if not os.path.exists(USERS_FILE):
         with open(USERS_FILE, "w") as f:
             json.dump({}, f)
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind((SERVER_IP, SERVER_PORT))
-    server_socket.listen(MAX_CONNECTIONS)
+    server_socket.bind((SERVER_IP, 12345))
+    server_socket.listen(10)
     print(f"Server in ascolto su {server_socket.getsockname()}")
 
     listening_thread = threading.Thread(target=listen_for_clients)
