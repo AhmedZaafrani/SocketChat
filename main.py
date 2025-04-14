@@ -1,8 +1,7 @@
-# main.py - File di configurazione condiviso
 import socket
 
 # Configurazioni condivise
-SERVER_IP = '172.20.10.13'  # Modifica questo con l'IP del server
+SERVER_IP = '0.0.0.0'
 SERVER_PORT = 12345
 USERS_FILE = "users.json"
 CHAT_LOG_FILE = "chat_log.txt"

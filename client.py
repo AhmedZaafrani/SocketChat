@@ -6,9 +6,7 @@ from string import whitespace
 
 import dearpygui.dearpygui as dpg
 from dearpygui.dearpygui import configure_item
-
-# DEFAULT_IP = "127.0.0.1"
-DEFAULT_PORT = "12345"
+from main import DEFAULT_IP, DEFAULT_PORT, BUFFER_SIZE
 
 dpg.create_context()
 dpg.create_viewport(title='Socket Chat', width=950, height=800)
@@ -38,8 +36,8 @@ def register():
         temp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         temp_socket.connect((dpg.get_value("ip"), int(DEFAULT_PORT)))
         temp_socket.send(f"REGISTER:{username}:{password}".encode("utf-8"))
+        response = temp_socket.recv(BUFFER_SIZE).decode("utf-8")
 
-        response = temp_socket.recv(1024).decode("utf-8")
         dpg.set_value("logerr", response)
 
         temp_socket.close()
@@ -92,7 +90,7 @@ def listen_to_server():
     global client_socket, chatlog
     while True:
         try:
-            msg = client_socket.recv(1024).decode("utf-8")
+            msg = client_socket.recv(BUFFER_SIZE).decode("utf-8")
             if not msg:
                 break
             with chatlog_lock:

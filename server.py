@@ -145,7 +145,6 @@ def messaggio_broadcast(message, sender_client):
 def start_server():
     global server_socket
 
-    # Crea il file users.json se non esiste
     if not os.path.exists(USERS_FILE):
         with open(USERS_FILE, "w") as f:
             json.dump({}, f)
