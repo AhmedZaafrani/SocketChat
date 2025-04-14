@@ -7,6 +7,7 @@ import os
 server_socket = None
 clients = []
 lock = threading.Lock()
+SERVER_IP = '172.20.10.13'
 USERS_FILE = "users.json"
 
 
@@ -152,9 +153,9 @@ def start_server():
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind(("127.0.0.1", 12345))
+    server_socket.bind((SERVER_IP, 12345))
     server_socket.listen(10)
-    print("Server in ascolto su 127.0.0.1:12345")
+    print(f"Server in ascolto su {server_socket.getsockname()}")
 
     listening_thread = threading.Thread(target=listen_for_clients)
     listening_thread.daemon = True
