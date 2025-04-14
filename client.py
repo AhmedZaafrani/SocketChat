@@ -38,7 +38,6 @@ def login():
 
 
 def listen_to_server():
-    global client_socket
     global chatlog
     while True:
         try:
@@ -46,16 +45,18 @@ def listen_to_server():
             if not msg:
                 break
             with chatlog_lock:
-                chatlog = chatlog + "\n" + msg
-        except:
-            continue
+                chatlog += "\n" + msg  # Aggiunge il messaggio già formattato dal server
+        except Exception as e:
+            print(f"Errore di connessione: {e}")
+            break
+
 
 def send_msg():
-    global client_socket
-    msg = dpg.get_value("input_txt")
-    print(msg)
-    timestamp = str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    client_socket.send((timestamp + ' ' + msg).encode("utf-8"))
+    global client_socket, chatlog
+    msg = dpg.get_value("input_txt").strip()
+    if not msg:
+        return
+    client_socket.send(msg.encode("utf-8"))
     dpg.set_value("input_txt", "")
 
 with dpg.window(label="Chat", tag="window"):
@@ -84,10 +85,9 @@ dpg.start_dearpygui()
 while dpg.is_dearpygui_running():
     if server_started:
         with chatlog_lock:
-            dpg.set_value("chatlog_field", chatlog)
+            if dpg.get_value("chatlog_field") != chatlog:
+                dpg.set_value("chatlog_field", chatlog)
     dpg.render_dearpygui_frame()
-
-dpg.destroy_context()
 
 if server_started:
     try:
