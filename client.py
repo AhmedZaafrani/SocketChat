@@ -2,9 +2,9 @@ import textwrap
 import threading
 import socket
 import datetime
-import dearpygui.dearpygui as dpg
+import dearpygui as dpg
 
-DEFAULT_IP = "127.0.0.1"
+# DEFAULT_IP = "127.0.0.1"
 DEFAULT_PORT = "12345"
 
 dpg.create_context()
@@ -27,7 +27,7 @@ def register():
 
     try:
         temp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        temp_socket.connect((DEFAULT_IP, int(DEFAULT_PORT)))
+        temp_socket.connect((dpg.get_value("ip"), int(DEFAULT_PORT)))
         temp_socket.send(f"REGISTER:{username}:{password}".encode("utf-8"))
 
         response = temp_socket.recv(1024).decode("utf-8")
@@ -50,7 +50,7 @@ def login():
     try:
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        client_socket.connect((DEFAULT_IP, int(DEFAULT_PORT)))
+        client_socket.connect((dpg.get_value("ip"), int(DEFAULT_PORT)))
 
         # Invia comando di login
         client_socket.send(f"LOGIN:{username}:{password}".encode("utf-8"))
@@ -104,7 +104,7 @@ def send_msg():
     formatted_msg = f"{timestamp} - {current_username}: {msg}"
 
     try:
-        client_socket.send((timestamp + " - " + msg).encode("utf-8"))
+        client_socket.send(formatted_msg.encode("utf-8"))
         with chatlog_lock:
             chatlog = chatlog + "\n" + formatted_msg
         dpg.set_value("input_txt", "")
@@ -112,15 +112,47 @@ def send_msg():
         dpg.set_value("logerr", f"Errore durante l'invio del messaggio: {str(e)}")
 
 
+def center_items():
+    # Calcola lo spaziatore laterale per il login
+    viewport_width = dpg.get_viewport_width()
+    form_width = 400  # Larghezza dei tuoi controlli di input
+    side_spacer = (viewport_width - form_width) / 2
+
+    # Aggiorna i valori degli spaziatori
+    dpg.set_item_width("left_spacer", side_spacer)
+    dpg.set_item_width("right_spacer", side_spacer)
+
+    # Calcola anche la larghezza per la chat se necessario
+    dpg.set_item_width("chatlog_field", viewport_width - 40)  # Margine ai lati
+
+    # Aggiorna la larghezza dell'input di testo
+    dpg.set_item_width("input_txt", viewport_width - 100)  # Spazio per il pulsante
+
+
 with dpg.window(label="Chat", tag="window"):
     with dpg.tab_bar(tag="tabbar"):
         with dpg.tab(label="Login", tag="login"):
-            dpg.add_text("Login")
-            dpg.add_input_text(label="Username", tag="username")
-            dpg.add_input_text(label="Password", tag="password", password=True)
-            dpg.add_button(label="Login", callback=login)
-            dpg.add_button(label="Register", callback=register)
-            dpg.add_text("", tag="logerr")
+            with dpg.group(horizontal=True):
+                dpg.add_spacer(tag="left_spacer", width=300)  # Spaziatore a sinistra
+
+                with dpg.group():  # Gruppo verticale per gli elementi di login
+                    dpg.add_spacer(height=100)  # Spaziatore in alto
+                    dpg.add_text("Login", indent=150)  # Testo centrato
+                    dpg.add_input_text(label="IP", tag="ip", width=300, default_value="127.0.0.1")
+                    dpg.add_input_text(label="Username", tag="username", width=300)
+                    dpg.add_input_text(label="Password", tag="password", password=True, width=300)
+
+                    # Gruppo orizzontale per i pulsanti, centrato
+                    with dpg.group(horizontal=True):
+                        dpg.add_spacer(width=60)  # Spazio per centrare i pulsanti
+                        dpg.add_button(label="Login", callback=login, width=80)
+                        dpg.add_spacer(width=10)
+                        dpg.add_button(label="Register", callback=register, width=80)
+
+                    dpg.add_text("", tag="logerr", color=(255, 0, 0))  # Colore rosso per errori
+                    dpg.add_spacer(height=100)  # Spaziatore in basso
+
+                dpg.add_spacer(tag="right_spacer", width=300)  # Spaziatore a destra
 
         with dpg.tab(label="Chat", tag="chat", show=False):
             dpg.add_text("Chat")
@@ -131,9 +163,15 @@ with dpg.window(label="Chat", tag="window"):
                 dpg.add_input_text(width=750, tag="input_txt", on_enter=True, callback=send_msg)
                 dpg.add_button(label="Invia", callback=send_msg)
 
+# Aggiungi la callback per il ridimensionamento della viewport
+dpg.set_viewport_resize_callback(center_items)
+
 dpg.set_primary_window("window", True)
 dpg.setup_dearpygui()
 dpg.show_viewport()
+
+# Esegui il centering iniziale dopo aver mostrato la viewport
+center_items()
 
 while dpg.is_dearpygui_running():
     if server_started:
@@ -144,7 +182,7 @@ while dpg.is_dearpygui_running():
 
 if server_started:
     try:
-        client_socket.send(b"closed connection")
+        client_socket.send("closed connection")
         client_socket.close()
     except:
         pass
