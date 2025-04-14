@@ -7,7 +7,6 @@ USERS_FILE = "users.json"
 CHAT_LOG_FILE = "chat_log.txt"
 
 # Configurazioni client
-DEFAULT_IP = SERVER_IP  # Client userà lo stesso IP del server
 DEFAULT_PORT = str(SERVER_PORT)  # Convertito a stringa per il client
 
 # Configurazioni server

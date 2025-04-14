@@ -7,7 +7,7 @@ import os
 server_socket = None
 clients = []
 lock = threading.Lock()
-
+from main import SERVER_IP, DEFAULT_PORT, BUFFER_SIZE,USERS_FILE
 
 
 def load_users():
