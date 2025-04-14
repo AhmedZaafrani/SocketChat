@@ -8,7 +8,6 @@ lock = threading.Lock()
 
 
 def ascolta_client(client, address):
-    client.send("Inserisci il tuo nome: ".encode('utf-8'))
     nome = client.recv(1024).decode('utf-8').strip()
 
     with lock:
