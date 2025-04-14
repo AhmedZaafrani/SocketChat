@@ -7,7 +7,7 @@ import os
 server_socket = None
 clients = []
 lock = threading.Lock()
-SERVER_IP = '172.20.10.13'
+SERVER_IP = '127.0.0.1'
 USERS_FILE = "users.json"
 
 
@@ -130,17 +130,22 @@ def listen_for_clients():
 def messaggio_broadcast(message, sender_client):
     with open("chat_log.txt", "a", encoding="utf-8") as log_file:
         log_file.write(f"{message}\n")
+    for client in clients:
+        print(client)
 
-    with lock:
-        for client in clients:
-            if client != sender_client:
-                try:
-                    client.send(message.encode('utf-8'))
-                except Exception as e:
-                    print(f"Errore nell'invio a un client: {e}")
-                    client.close()
-                    if client in clients:
-                        clients.remove(client)
+
+    print("entered in lock of message_broadcast")
+    for client in clients:
+        print(f"client {client}")
+        if client != sender_client:
+            try:
+                client.send(message.encode('utf-8'))
+                print("mandato")
+            except Exception as e:
+                print(f"Errore nell'invio a un client: {e}")
+                client.close()
+                if client in clients:
+                    clients.remove(client)
 
 
 def start_server():
@@ -163,9 +168,14 @@ def start_server():
 
     try:
         while True:
-            cmd = input("Server command (quit per uscire): ")
+            cmd = input("Server command (quit per uscire - send per inviare): ")
             if cmd.lower() == "quit":
                 break
+            elif cmd.lower() == "send":
+                msg = input("Inserisci il messaggio da inviare a tutti i client: ")
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                messaggio_broadcast(f"{timestamp} - Server: {msg}", None)
+
     except KeyboardInterrupt:
         pass
     finally:
