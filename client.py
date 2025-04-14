@@ -2,7 +2,7 @@ import textwrap
 import threading
 import socket
 import datetime
-import dearpygui as dpg
+import dearpygui.dearpygui as dpg
 
 # DEFAULT_IP = "127.0.0.1"
 DEFAULT_PORT = "12345"
@@ -15,6 +15,12 @@ chatlog = ""
 client_socket = None
 server_started = False
 current_username = ""
+
+# Definisco dimensioni di base per gli elementi
+BUTTON_HEIGHT = 40
+INPUT_HEIGHT = 45
+SPACING = 20
+LOGIN_FORM_WIDTH_RATIO = 0.5  # 50% della larghezza della viewport
 
 
 def register():
@@ -113,55 +119,99 @@ def send_msg():
 
 
 def center_items():
-    # Calcola lo spaziatore laterale per il login
     viewport_width = dpg.get_viewport_width()
-    form_width = 400  # Larghezza dei tuoi controlli di input
+    viewport_height = dpg.get_viewport_height()
+
+    # Calcola dimensioni proporzionali al viewport
+    form_width = int(viewport_width * LOGIN_FORM_WIDTH_RATIO)
     side_spacer = (viewport_width - form_width) / 2
 
-    # Aggiorna i valori degli spaziatori
+    # Aumenta la dimensione dei testi
+    dpg.set_value("login_title", "LOGIN")
+    dpg.configure_item("login_title", color=[255, 255, 255])
+
+    # Aggiorna dimensioni degli elementi di login
     dpg.set_item_width("left_spacer", side_spacer)
     dpg.set_item_width("right_spacer", side_spacer)
 
-    # Calcola anche la larghezza per la chat se necessario
-    dpg.set_item_width("chatlog_field", viewport_width - 40)  # Margine ai lati
+    # Ridimensiona i campi di input
+    input_width = form_width - 40  # Un po' più piccolo del form per margini
+    dpg.set_item_width("ip", input_width)
+    dpg.configure_item("ip", height=INPUT_HEIGHT)
+    dpg.set_item_width("username", input_width)
+    dpg.configure_item("username", height=INPUT_HEIGHT)
+    dpg.set_item_width("password", input_width)
+    dpg.configure_item("password", height=INPUT_HEIGHT)
 
-    # Aggiorna la larghezza dell'input di testo
-    dpg.set_item_width("input_txt", viewport_width - 100)  # Spazio per il pulsante
+    # Ridimensiona pulsanti
+    button_width = (input_width - 20) / 2  # Dividi lo spazio disponibile per i due pulsanti con un piccolo gap
+    dpg.set_item_width("login_button", button_width)
+    dpg.configure_item("login_button", height=BUTTON_HEIGHT)
+    dpg.set_item_width("register_button", button_width)
+    dpg.configure_item("register_button", height=BUTTON_HEIGHT)
+
+    # Aggiorna i componenti della chat
+    chat_width = viewport_width - (SPACING * 2)  # Margine ai lati
+    chat_height = viewport_height - 180  # Spazio per input e altri elementi
+
+    dpg.set_item_width("chatlog_field", chat_width)
+    dpg.set_item_height("chatlog_field", chat_height)
+
+    # Aggiorna l'input di testo della chat
+    input_chat_width = chat_width - 120  # Spazio per il pulsante Invia
+    dpg.set_item_width("input_txt", input_chat_width)
+    dpg.configure_item("input_txt", height=INPUT_HEIGHT)
+
+    # Aggiorna dimensione pulsante invio
+    dpg.set_item_width("send_button", 100)
+    dpg.configure_item("send_button", height=INPUT_HEIGHT)
 
 
-with dpg.window(label="Chat", tag="window"):
-    with dpg.tab_bar(tag="tabbar"):
-        with dpg.tab(label="Login", tag="login"):
-            with dpg.group(horizontal=True):
-                dpg.add_spacer(tag="left_spacer", width=300)  # Spaziatore a sinistra
+def create_gui():
+    with dpg.window(label="Chat", tag="window"):
+        with dpg.tab_bar(tag="tabbar"):
+            # Tab Login
+            with dpg.tab(label="Login", tag="login"):
+                with dpg.group(horizontal=True):
+                    dpg.add_spacer(tag="left_spacer", width=300)  # Spaziatore a sinistra
 
-                with dpg.group():  # Gruppo verticale per gli elementi di login
-                    dpg.add_spacer(height=100)  # Spaziatore in alto
-                    dpg.add_text("Login", indent=150)  # Testo centrato
-                    dpg.add_input_text(label="IP", tag="ip", width=300, default_value="127.0.0.1")
-                    dpg.add_input_text(label="Username", tag="username", width=300)
-                    dpg.add_input_text(label="Password", tag="password", password=True, width=300)
+                    with dpg.group():  # Gruppo verticale per gli elementi di login
+                        dpg.add_spacer(height=SPACING * 5)  # Spaziatore in alto
+                        dpg.add_text("LOGIN", tag="login_title", color=[255, 255, 255])
+                        dpg.add_spacer(height=SPACING)
+                        dpg.add_input_text(label="IP", tag="ip", default_value="127.0.0.1")
+                        dpg.add_spacer(height=SPACING)
+                        dpg.add_input_text(label="Username", tag="username")
+                        dpg.add_spacer(height=SPACING)
+                        dpg.add_input_text(label="Password", tag="password", password=True)
+                        dpg.add_spacer(height=SPACING * 2)
 
-                    # Gruppo orizzontale per i pulsanti, centrato
-                    with dpg.group(horizontal=True):
-                        dpg.add_spacer(width=60)  # Spazio per centrare i pulsanti
-                        dpg.add_button(label="Login", callback=login, width=80)
-                        dpg.add_spacer(width=10)
-                        dpg.add_button(label="Register", callback=register, width=80)
+                        # Gruppo orizzontale per i pulsanti, centrato
+                        with dpg.group(horizontal=True):
+                            dpg.add_button(label="Login", tag="login_button", callback=login)
+                            dpg.add_spacer(width=SPACING)
+                            dpg.add_button(label="Register", tag="register_button", callback=register)
 
-                    dpg.add_text("", tag="logerr", color=(255, 0, 0))  # Colore rosso per errori
-                    dpg.add_spacer(height=100)  # Spaziatore in basso
+                        dpg.add_spacer(height=SPACING)
+                        dpg.add_text("", tag="logerr", color=(255, 0, 0))  # Colore rosso per errori
+                        dpg.add_spacer(height=SPACING * 5)  # Spaziatore in basso
 
-                dpg.add_spacer(tag="right_spacer", width=300)  # Spaziatore a destra
+                    dpg.add_spacer(tag="right_spacer", width=300)  # Spaziatore a destra
 
-        with dpg.tab(label="Chat", tag="chat", show=False):
-            dpg.add_text("Chat")
-            dpg.add_input_text(
-                tag="chatlog_field", multiline=True, readonly=True, tracked=True,
-                track_offset=1, width=-1, height=600)
-            with dpg.group(horizontal=True):
-                dpg.add_input_text(width=750, tag="input_txt", on_enter=True, callback=send_msg)
-                dpg.add_button(label="Invia", callback=send_msg)
+            # Tab Chat
+            with dpg.tab(label="Chat", tag="chat", show=False):
+                dpg.add_text("CHAT", tag="chat_title", color=[255, 255, 255])
+                dpg.add_input_text(
+                    tag="chatlog_field", multiline=True, readonly=True, tracked=True,
+                    track_offset=1)
+                dpg.add_spacer(height=SPACING)
+                with dpg.group(horizontal=True):
+                    dpg.add_input_text(tag="input_txt", on_enter=True, callback=send_msg)
+                    dpg.add_button(label="Invia", tag="send_button", callback=send_msg)
+
+
+# Creazione dell'interfaccia
+create_gui()
 
 # Aggiungi la callback per il ridimensionamento della viewport
 dpg.set_viewport_resize_callback(center_items)
