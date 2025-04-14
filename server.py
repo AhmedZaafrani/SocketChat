@@ -1,97 +1,130 @@
 import threading
 import socket
 import datetime
+import json
+import os
 
 server_socket = None
 clients = []
 lock = threading.Lock()
+USERS_FILE = "users.json"
 
 
-def ascolta_client(client, address):
-    nome = client.recv(1024).decode('utf-8').strip()
+def load_users():
+    if not os.path.exists(USERS_FILE):
+        return {}
+    try:
+        with open(USERS_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
 
-    with lock:
-        clients.append(client)
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        messaggio_broadcast(f"{timestamp} - {nome} si è unito alla chat".encode('utf-8'), None)
-        print(f"{nome} - {address} - si è unito alla chat")  # log
 
-    while True:
-        try:
-            message = client.recv(1024).decode('utf-8')
-            if message:
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f, indent=4)
+
+
+def register_user(username, password):
+    users = load_users()
+    if username in users:
+        return False, "Username già esistente"
+    users[username] = password
+    save_users(users)
+    return True, "Registrazione completata"
+
+
+def authenticate_user(username, password):
+    users = load_users()
+    if username not in users:
+        return False, "Username non trovato"
+    if users[username] != password:
+        return False, "Password errata"
+    return True, "Autenticazione riuscita"
+
+
+def handle_client_connection(client, address):
+    try:
+        # Ricevi il comando iniziale
+        data = client.recv(1024).decode('utf-8').strip()
+        if not data:
+            return
+
+        print(f"Comando ricevuto da {address}: {data}")  # Debug
+
+        if data.startswith("REGISTER:"):
+            _, username, password = data.split(":", 2)
+            success, message = register_user(username, password)
+            client.send(message.encode('utf-8'))
+            print(f"Registrazione: {username} - {message}")  # Debug
+            if not success:
+                client.close()
+                return
+
+        elif data.startswith("LOGIN:"):
+            _, username, password = data.split(":", 2)
+            success, message = authenticate_user(username, password)
+            client.send(message.encode('utf-8'))
+            print(f"Login: {username} - {message}")  # Debug
+            if not success:
+                client.close()
+                return
+        else:
+            client.send("Comando non valido".encode('utf-8'))
+            client.close()
+            return
+
+        # Se arriviamo qui, l'utente è autenticato
+        with lock:
+            clients.append(client)
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            messaggio_broadcast(f"{timestamp} - {username} si è unito alla chat", None)
+            print(f"{username} si è unito alla chat")
+
+        # Gestione normale della chat
+        while True:
+            try:
+                message = client.recv(1024).decode('utf-8')
+                if not message:
+                    break
                 if message == "closed connection":
                     break
 
-                # Assumendo che il client invii un messaggio nel formato "timestamp - testo"
-                # inserisco il nome dopo il timestamp
                 parts = message.split(" - ", 1)
                 if len(parts) == 2:
                     timestamp, text = parts
-                    messaggio_broadcast(f"{timestamp} - {nome}: {text}", client)
+                    messaggio_broadcast(f"{timestamp} - {username}: {text}", client)
                 else:
-                    # timestamp messo dal server nel caso il formato non sia quello atteso
                     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    messaggio_broadcast(f"{timestamp} - {nome}: {message}", client)
+                    messaggio_broadcast(f"{timestamp} - {username}: {message}", client)
 
-        except Exception as e:
-            print(f"eccezione nella gestione del client {client}. Info aggiuntive: {e}")
+            except Exception as e:
+                print(f"Errore con client {username}: {e}")
+                break
 
-    with lock:
-        clients.remove(client)
-        messaggio_broadcast(f"{nome} ha lasciato la chat", client)
-        print(f"{nome} - {address} - ha lasciato la chat") # log
-        client.close()
+    except Exception as e:
+        print(f"Errore durante l'autenticazione: {e}")
+    finally:
+        with lock:
+            if client in clients:
+                clients.remove(client)
+                messaggio_broadcast(f"{username} ha lasciato la chat", client)
+                print(f"{username} ha lasciato la chat")
+            client.close()
 
 
-def listen_for_client():
-    global server_socket
+def listen_for_clients():
     while True:
         try:
             client, address = server_socket.accept()
-            print(f"si è connesso al server: {address}") # log
-            client_thread = threading.Thread(target=ascolta_client, args=(client, address))
+            print(f"Nuova connessione da: {address}")
+            client_thread = threading.Thread(target=handle_client_connection, args=(client, address))
             client_thread.daemon = True
             client_thread.start()
         except Exception as e:
-            print(f"eccezione nella funzione listen_for_client: {e}")
+            print(f"Errore nell'accettare connessioni: {e}")
             break
 
-def start_server():
-    global server_socket
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind(("127.0.0.1", 12345))
-    server_socket.listen(10)
-
-    listening_thread = threading.Thread(target=listen_for_client, )
-    listening_thread.daemon = True
-    listening_thread.start()
-
-    try:
-        while True:
-            cmd = input("Server command (quit per uscire - send per inviare un messaggio globale): ")
-            if cmd.lower() == "quit":
-                break
-            elif cmd == "send":
-                cmd = input("Inserire il messaggio da inviare: (exit per uscire dalla modalità invio messaggio globale): ")
-                if cmd == "exit":
-                    continue
-                else:
-                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    messaggio_broadcast(f"{timestamp} - Server: {cmd}", None)
-                    print(f"Invio riuscito!")
-
-
-    except KeyboardInterrupt:
-        pass
-
-    finally:
-        print("Server in chiusura...")
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        messaggio_broadcast(f"{timestamp} - Messaggio globale: Server in chiusura...", None)
-        if server_socket:
-            server_socket.close()
 
 def messaggio_broadcast(message, sender_client):
     with open("chat_log.txt", "a", encoding="utf-8") as log_file:
@@ -101,13 +134,43 @@ def messaggio_broadcast(message, sender_client):
         for client in clients:
             if client != sender_client:
                 try:
-                    client.send(message)
+                    client.send(message.encode('utf-8'))
                 except Exception as e:
-                    print(f"errore nella funzione broadcast. Info: {e}")
-                    # Se c'è un errore, il thread del client è attivo stranamente ma il client probabilmente si è disconnesso
+                    print(f"Errore nell'invio a un client: {e}")
                     client.close()
                     if client in clients:
                         clients.remove(client)
+
+
+def start_server():
+    global server_socket
+
+    # Crea il file users.json se non esiste
+    if not os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "w") as f:
+            json.dump({}, f)
+
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(("127.0.0.1", 12345))
+    server_socket.listen(5)
+    print("Server in ascolto su 127.0.0.1:12345")
+
+    listening_thread = threading.Thread(target=listen_for_clients)
+    listening_thread.daemon = True
+    listening_thread.start()
+
+    try:
+        while True:
+            cmd = input("Server command (quit per uscire): ")
+            if cmd.lower() == "quit":
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print("Chiusura server...")
+        messaggio_broadcast("Server in chiusura...", None)
+        server_socket.close()
 
 
 if __name__ == "__main__":
