@@ -35,8 +35,11 @@ def register():
     try:
         temp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         temp_socket.connect((SERVER_IP, DEFAULT_PORT))
+        print("sending registered usernamen and password")
         temp_socket.send(f"REGISTER:{username}:{password}".encode("utf-8"))
+        print("sent registered username and password")
         response = temp_socket.recv(BUFFER_SIZE).decode("utf-8")
+        print(response)
 
         dpg.set_value("logerr", response)
 
