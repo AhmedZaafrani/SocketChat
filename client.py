@@ -6,7 +6,9 @@ from string import whitespace
 
 import dearpygui.dearpygui as dpg
 from dearpygui.dearpygui import configure_item
-from main import SERVER_IP, DEFAULT_PORT, BUFFER_SIZE
+SERVER_IP = '172.20.10.2'
+DEFAULT_PORT = 12345
+BUFFER_SIZE = 1024
 
 dpg.create_context()
 dpg.create_viewport(title='Socket Chat', width=950, height=800)
@@ -19,9 +21,9 @@ current_username = ""
 
 # Definisco dimensioni di base per gli elementi
 BUTTON_HEIGHT = 40
-INPUT_HEIGHT = 45
+INPUT_HEIGHT = 35
 SPACING = 20
-LOGIN_FORM_WIDTH_RATIO = 0.5  # 50% della larghezza della viewport
+LOGIN_FORM_WIDTH_RATIO = 0.65  # 50% della larghezza della viewport
 
 
 def register():
@@ -154,7 +156,8 @@ def center_items():
 
     # Aggiorna i componenti della chat
     chat_width = viewport_width - (SPACING * 2)  # Margine ai lati
-    chat_height = viewport_height - 180  # Spazio per inp e altri elementi
+    file_width = viewport_width - (SPACING * 2)  # Margine ai lati
+    chat_height = viewport_height - 200  # Spazio per inp e altri elementi
 
     dpg.set_item_width("chatlog_field", chat_width)
     dpg.set_item_height("chatlog_field", chat_height)
@@ -168,6 +171,18 @@ def center_items():
     dpg.set_item_width("send_button", 100)
     dpg.configure_item("send_button", height=INPUT_HEIGHT)
 
+    # Aggiorna l'input di testo della file select
+    input_file_width = file_width - 120  # Spazio per il pulsante file
+    dpg.set_item_width("file_field", input_file_width)
+    dpg.configure_item("file_field", height=INPUT_HEIGHT)
+
+    # Aggiorna dimensione pulsante file
+    dpg.set_item_width("file_button", 100)
+    dpg.configure_item("file_button", height=INPUT_HEIGHT)
+
+def carica_file():
+    pass
+
 
 def create_gui():
     with dpg.window(label="Chat", tag="window"):
@@ -178,7 +193,7 @@ def create_gui():
                     dpg.add_spacer(tag="left_spacer", width=300)  # Spaziatore a sinistra
 
                     with dpg.group():  # Gruppo verticale per gli elementi di login
-                        dpg.add_spacer(height=SPACING * 7)  # Spaziatore in alto
+                        dpg.add_spacer(height=SPACING * 13)  # Spaziatore in alto
                         dpg.add_text("LOGIN", tag="login_title", color=[255, 255, 255])
                         dpg.add_spacer(height=SPACING)
                         dpg.add_input_text(label="Username", tag="username")
@@ -206,8 +221,17 @@ def create_gui():
                     track_offset=1)
                 dpg.add_spacer(height=SPACING)
                 with dpg.group(horizontal=True):
-                    dpg.add_input_text(tag="input_txt", on_enter=True, callback=send_msg)
+                    dpg.add_input_text(tag="input_txt", multiline=True, on_enter=True, callback=send_msg)
+                    dpg.add_spacer(width=SPACING)  # Spaziatore a destra
                     dpg.add_button(label="Invia", tag="send_button", callback=send_msg)
+
+                dpg.add_spacer(height=5)
+
+                with dpg.group(horizontal=True):
+                    dpg.add_input_text(tag="file_field", multiline=True, readonly=True)
+                    dpg.add_spacer(width=SPACING)  # Spaziatore a destra
+                    dpg.add_button(label="File", tag="file_button", callback=carica_file)
+
 
 
 # Creazione dell'interfaccia

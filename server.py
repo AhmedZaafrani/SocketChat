@@ -8,6 +8,9 @@ server_socket = None
 clients = []
 lock = threading.Lock()
 USERS_FILE = "users.json"
+SERVER_IP = '172.20.10.2'
+PORT = 12345
+MAX_CONNECTIONS = 10
 
 
 def load_users():
@@ -152,9 +155,9 @@ def start_server():
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind(("127.0.0.1", 12345))
-    server_socket.listen(10)
-    print("Server in ascolto su 127.0.0.1:12345")
+    server_socket.bind((SERVER_IP, PORT))
+    server_socket.listen(MAX_CONNECTIONS)
+    print(f"Server in ascolto su {SERVER_IP}:{PORT}")
 
     listening_thread = threading.Thread(target=listen_for_clients)
     listening_thread.daemon = True
@@ -162,7 +165,7 @@ def start_server():
 
     try:
         while True:
-            cmd = input("Server command (quit per uscire): ")
+            cmd = input("Server command (quit per uscire - send per inviare un messaggio globale a tutti i client collegati): ")
             if cmd.lower() == "quit":
                 break
             elif cmd.lower() == "send":
