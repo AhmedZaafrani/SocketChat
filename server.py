@@ -7,9 +7,7 @@ import os
 server_socket = None
 clients = []
 lock = threading.Lock()
-from main import SERVER_IP, DEFAULT_PORT, BUFFER_SIZE,USERS_FILE
-
-
+USERS_FILE = "users.json"
 
 
 def load_users():
@@ -132,16 +130,16 @@ def messaggio_broadcast(message, sender_client):
     with open("chat_log.txt", "a", encoding="utf-8") as log_file:
         log_file.write(f"{message}\n")
 
-
-    for client in clients:
-        if client != sender_client:
-            try:
-                client.send(message.encode('utf-8'))
-            except Exception as e:
-                print(f"Errore nell'invio a un client: {e}")
-                client.close()
-                if client in clients:
-                    clients.remove(client)
+    with lock:
+        for client in clients:
+            if client != sender_client:
+                try:
+                    client.send(message.encode('utf-8'))
+                except Exception as e:
+                    print(f"Errore nell'invio a un client: {e}")
+                    client.close()
+                    if client in clients:
+                        clients.remove(client)
 
 
 def start_server():
@@ -154,9 +152,9 @@ def start_server():
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind((SERVER_IP, 12345))
+    server_socket.bind(("127.0.0.1", 12345))
     server_socket.listen(10)
-    print(f"Server in ascolto su {server_socket.getsockname()}")
+    print("Server in ascolto su 127.0.0.1:12345")
 
     listening_thread = threading.Thread(target=listen_for_clients)
     listening_thread.daemon = True
@@ -164,17 +162,18 @@ def start_server():
 
     try:
         while True:
-            cmd = input("Server command (quit per uscire - send per rinviare un messaggio globale a tutti i client): ")
+            cmd = input("Server command (quit per uscire): ")
             if cmd.lower() == "quit":
                 break
             elif cmd.lower() == "send":
                 msg = input("Inserisci il messaggio da inviare (exit per uscire dalla modalità invio messaggio): ")
-                if msg.lower() == ("exit"):
-                    pass
-                else:
-                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    messaggio_broadcast(f"{timestamp} - Server: {msg}", None)
-                    print("messaggio inviato!")
+            if msg.lower() == ("exit"):
+                pass
+            else:
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                messaggio_broadcast(f"{timestamp} - Server: {msg}", None)
+                print("messaggio inviato!")
+
     except KeyboardInterrupt:
         pass
     finally:

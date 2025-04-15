@@ -15,3 +15,4 @@ DEFAULT_PORT = SERVER_PORT  # Convertito a stringa per il client
 # Configurazioni server
 MAX_CONNECTIONS = 10
 BUFFER_SIZE = 1024
+
