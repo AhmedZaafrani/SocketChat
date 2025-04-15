@@ -7,7 +7,7 @@ USERS_FILE = "users.json"
 CHAT_LOG_FILE = "chat_log.txt"
 
 # Configurazioni client
-DEFAULT_PORT = str(SERVER_PORT)  # Convertito a stringa per il client
+DEFAULT_PORT = SERVER_PORT  # Convertito a stringa per il client
 
 # Configurazioni server
 MAX_CONNECTIONS = 10

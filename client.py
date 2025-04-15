@@ -34,7 +34,7 @@ def register():
 
     try:
         temp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        temp_socket.connect((dpg.get_value("ip"), int(DEFAULT_PORT)))
+        temp_socket.connect((SERVER_IP, DEFAULT_PORT))
         temp_socket.send(f"REGISTER:{username}:{password}".encode("utf-8"))
         response = temp_socket.recv(BUFFER_SIZE).decode("utf-8")
 
@@ -57,7 +57,7 @@ def login():
     try:
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        client_socket.connect((SERVER_IP, int(DEFAULT_PORT)))
+        client_socket.connect((SERVER_IP, DEFAULT_PORT))
 
         # Invia comando di login
         client_socket.send(f"LOGIN:{username}:{password}".encode("utf-8"))
@@ -191,7 +191,7 @@ def create_gui():
 
                         dpg.add_spacer(height=SPACING)
                         dpg.add_text("", tag="logerr", color=(255, 0, 0))  # Colore rosso per errori
-                        dpg.add_spacer(height=SPACING * 5)  # Spaziatore in basso
+                        dpg.add_spacer(height=SPACING * 2)  # Spaziatore in basso
 
                     dpg.add_spacer(tag="right_spacer", width=300)  # Spaziatore a destra
 

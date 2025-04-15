@@ -130,16 +130,16 @@ def messaggio_broadcast(message, sender_client):
     with open("chat_log.txt", "a", encoding="utf-8") as log_file:
         log_file.write(f"{message}\n")
 
-    with lock:
-        for client in clients:
-            if client != sender_client:
-                try:
-                    client.send(message.encode('utf-8'))
-                except Exception as e:
-                    print(f"Errore nell'invio a un client: {e}")
-                    client.close()
-                    if client in clients:
-                        clients.remove(client)
+
+    for client in clients:
+        if client != sender_client:
+            try:
+                client.send(message.encode('utf-8'))
+            except Exception as e:
+                print(f"Errore nell'invio a un client: {e}")
+                client.close()
+                if client in clients:
+                    clients.remove(client)
 
 
 def start_server():
@@ -162,9 +162,17 @@ def start_server():
 
     try:
         while True:
-            cmd = input("Server command (quit per uscire): ")
+            cmd = input("Server command (quit per uscire - send per rinviare un messaggio globale a tutti i client): ")
             if cmd.lower() == "quit":
                 break
+            elif cmd.lower() == "send":
+                msg = input("Inserisci il messaggio da inviare (exit per uscire dalla modalità invio messaggio): ")
+                if msg.lower() == ("exit"):
+                    pass
+                else:
+                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    messaggio_broadcast(f"{timestamp} - Server: {msg}", None)
+                    print("messaggio inviato!")
     except KeyboardInterrupt:
         pass
     finally:
