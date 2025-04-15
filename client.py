@@ -6,7 +6,7 @@ from string import whitespace
 
 import dearpygui.dearpygui as dpg
 from dearpygui.dearpygui import configure_item
-from main import DEFAULT_IP, DEFAULT_PORT, BUFFER_SIZE
+from main import SERVER_IP, DEFAULT_PORT, BUFFER_SIZE
 
 dpg.create_context()
 dpg.create_viewport(title='Socket Chat', width=950, height=800)
@@ -57,7 +57,7 @@ def login():
     try:
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        client_socket.connect((dpg.get_value("ip"), int(DEFAULT_PORT)))
+        client_socket.connect((SERVER_IP, int(DEFAULT_PORT)))
 
         # Invia comando di login
         client_socket.send(f"LOGIN:{username}:{password}".encode("utf-8"))
@@ -137,8 +137,6 @@ def center_items():
 
     # Ridimensiona i campi di input
     input_width = form_width - 40  # Un po' più piccolo del form per margini
-    dpg.set_item_width("ip", input_width)
-    dpg.configure_item("ip", height=INPUT_HEIGHT)
     dpg.set_item_width("username", input_width)
     dpg.configure_item("username", height=INPUT_HEIGHT)
     dpg.set_item_width("password", input_width)
@@ -177,10 +175,8 @@ def create_gui():
                     dpg.add_spacer(tag="left_spacer", width=300)  # Spaziatore a sinistra
 
                     with dpg.group():  # Gruppo verticale per gli elementi di login
-                        dpg.add_spacer(height=SPACING * 5)  # Spaziatore in alto
+                        dpg.add_spacer(height=SPACING * 7)  # Spaziatore in alto
                         dpg.add_text("LOGIN", tag="login_title", color=[255, 255, 255])
-                        dpg.add_spacer(height=SPACING)
-                        dpg.add_input_text(label="IP", tag="ip", default_value="127.0.0.1")
                         dpg.add_spacer(height=SPACING)
                         dpg.add_input_text(label="Username", tag="username")
                         dpg.add_spacer(height=SPACING)
