@@ -10,6 +10,8 @@ lock = threading.Lock()
 from main import SERVER_IP, DEFAULT_PORT, BUFFER_SIZE,USERS_FILE
 
 
+
+
 def load_users():
     if not os.path.exists(USERS_FILE):
         return {}
