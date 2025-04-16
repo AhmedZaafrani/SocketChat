@@ -133,16 +133,16 @@ def messaggio_broadcast(message, sender_client):
     with open("chat_log.txt", "a", encoding="utf-8") as log_file:
         log_file.write(f"{message}\n")
 
-    with lock:
-        for client in clients:
-            if client != sender_client:
-                try:
-                    client.send(message.encode('utf-8'))
-                except Exception as e:
-                    print(f"Errore nell'invio a un client: {e}")
-                    client.close()
-                    if client in clients:
-                        clients.remove(client)
+
+    for client in clients:
+        if client != sender_client:
+            try:
+                client.send(message.encode('utf-8'))
+            except Exception as e:
+                print(f"Errore nell'invio a un client: {e}")
+                client.close()
+                if client in clients:
+                    clients.remove(client)
 
 
 def start_server():
