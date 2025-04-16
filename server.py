@@ -3,6 +3,11 @@ import socket
 import datetime
 import json
 import os
+from ftplib import FTP
+from pyftpdlib.authorizers import DummyAuthorizer
+from pyftpdlib.handlers import FTPHandler
+from pyftpdlib.servers import FTPServer
+
 
 server_socket = None
 clients = []
@@ -11,7 +16,26 @@ USERS_FILE = "users.json"
 SERVER_IP = '172.20.10.2'
 PORT = 12345
 MAX_CONNECTIONS = 10
+authorizer = None
 
+def setup_server_FTP():
+    global authorizer
+    dict = load_users()
+    authorizer = DummyAuthorizer()
+    # Itera sulle coppie chiave-valore (username, password)
+    for username, password in dict.items():
+        authorizer.add_user(
+            username=username,
+            password=password,
+            homedir="/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp",
+            perm="elradfmwMT"  # ogni lettera è un permesso
+        )
+
+    handler = FTPHandler
+    handler.authorizer = authorizer
+
+    server_FTP = FTPServer(("0.0.0.0", 12346), handler)
+    server_FTP.serve_forever()
 
 def load_users():
     if not os.path.exists(USERS_FILE):
@@ -64,6 +88,13 @@ def handle_client_connection(client, address):
                 client.close()
                 return
 
+            authorizer.add_user(
+                username=username,
+                password=password,
+                homedir="/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp",
+                perm="elradfmwMT"  # ogni lettera è un permesso
+            )
+
         elif data.startswith("LOGIN:"):
             _, username, password = data.split(":", 2)
             success, message = authenticate_user(username, password)
@@ -113,7 +144,7 @@ def handle_client_connection(client, address):
                 clients.remove(client)
                 messaggio_broadcast(f"{username} ha lasciato la chat", client)
                 print(f"{username} ha lasciato la chat")
-            client.close()
+                client.close()
 
 
 def listen_for_clients():
@@ -122,7 +153,6 @@ def listen_for_clients():
             client, address = server_socket.accept()
             print(f"Nuova connessione da: {address}")
             client_thread = threading.Thread(target=handle_client_connection, args=(client, address))
-            client_thread.daemon = True
             client_thread.start()
         except Exception as e:
             print(f"Errore nell'accettare connessioni: {e}")
@@ -147,11 +177,22 @@ def messaggio_broadcast(message, sender_client):
 
 def start_server():
     global server_socket
+    global authorizer
 
     # Crea il file users.json se non esiste
     if not os.path.exists(USERS_FILE):
         with open(USERS_FILE, "w") as f:
             json.dump({}, f)
+
+    # Avvia il server FTP in un thread separato
+    server_ftp_thread = threading.Thread(target=setup_server_FTP)
+    server_ftp_thread.daemon = True
+    server_ftp_thread.start()
+
+    # Avvia il distributore di file in un altro thread
+    #distributor_thread = threading.Thread(target=file_distributor)
+    #distributor_thread.daemon = True
+    #distributor_thread.start()
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -170,12 +211,12 @@ def start_server():
                 break
             elif cmd.lower() == "send":
                 msg = input("Inserisci il messaggio da inviare (exit per uscire dalla modalità invio messaggio): ")
-            if msg.lower() == ("exit"):
-                pass
-            else:
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                messaggio_broadcast(f"{timestamp} - Server: {msg}", None)
-                print("messaggio inviato!")
+                if msg.lower() == ("exit"):
+                   pass
+                else:
+                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    messaggio_broadcast(f"{timestamp} - Server: {msg}", None)
+                    print("messaggio inviato!")
 
     except KeyboardInterrupt:
         pass

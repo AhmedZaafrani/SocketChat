@@ -1,11 +1,23 @@
+import os
+import sys
+import tempfile
 import textwrap
 import threading
 import socket
 import datetime
 from string import whitespace
+from ftplib import FTP
+import platform
+import subprocess
+import time
 
 import dearpygui.dearpygui as dpg
+import tkinter as tk
+from tkfilebrowser import askopendirname, askopenfilename
 from dearpygui.dearpygui import configure_item
+
+from server import server_socket
+
 SERVER_IP = '172.20.10.2'
 DEFAULT_PORT = 12345
 BUFFER_SIZE = 1024
@@ -18,12 +30,49 @@ chatlog = ""
 client_socket = None
 server_started = False
 current_username = ""
+ftp_server = None
+
+# Variabile globale per tracciare lo stato
+file_selection_in_progress = False
 
 # Definisco dimensioni di base per gli elementi
 BUTTON_HEIGHT = 40
 INPUT_HEIGHT = 35
 SPACING = 20
 LOGIN_FORM_WIDTH_RATIO = 0.65  # 50% della larghezza della viewport
+
+
+def setup_connection_server_FTP():
+    global ftp_server
+    try:
+        # Chiudi qualsiasi connessione esistente
+        if ftp_server:
+            try:
+                ftp_server.quit()
+            except:
+                pass
+
+        # Crea una nuova connessione
+        ftp_server = FTP()
+        ftp_server.connect(SERVER_IP, 12346)
+
+        # Debug: mostra credenziali
+        username = current_username
+        password = dpg.get_value("password")
+        print(f"Tentativo login FTP con: {username}:{password}")
+
+        # Login con metodo standard
+        response = ftp_server.login(user=username, passwd=password)
+        print(f"Risposta login FTP: {response}")
+
+        # Verifica se siamo effettivamente loggati
+        ftp_server.sendcmd("PWD")  # Questo comando dovrebbe funzionare solo se siamo loggati
+
+        print(f"Connessione FTP stabilita come {username}")
+        return True
+    except Exception as e:
+        print(f"Errore nella connessione FTP: {e}")
+        raise e
 
 
 def register():
@@ -60,6 +109,7 @@ def login():
         return
 
     try:
+        # Prima connettiti al server di chat e autenticati
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         client_socket.connect((SERVER_IP, DEFAULT_PORT))
@@ -74,6 +124,13 @@ def login():
             dpg.set_value("logerr", response)
             client_socket.close()
             return
+
+        # Solo dopo l'autenticazione riuscita, connettiti al server FTP
+        try:
+            setup_connection_server_FTP()
+        except Exception as e:
+            print(f"Errore nella connessione FTP: {e}")
+            # Continua comunque con la chat anche se la connessione FTP fallisce
 
         current_username = username
         listen_thread = threading.Thread(target=listen_to_server)
@@ -92,36 +149,91 @@ def login():
 
 
 def listen_to_server():
-    global client_socket, chatlog
+    global client_socket, chatlog, ftp_server
     while True:
         try:
             msg = client_socket.recv(BUFFER_SIZE).decode("utf-8")
             if not msg:
                 break
-            with chatlog_lock:
-                chatlog = chatlog + "\n" + msg
-                dpg.set_value("chatlog_field", chatlog)
+            elif msg == "sending_file":
+                time_stamp_and_user_name = client_socket.recv(BUFFER_SIZE).decode("utf-8")
+
+                download_path = "/Users/simo/Documents/GitHub/Senza nome/SocketChat/client_downloaded_file"  # Definisci un percorso dove verranno scaricati i file
+                file_path = os.path.join(download_path, "nome_file_scaricato")
+                file_path = os.path.abspath(file_path)
+
+                # Controlla il sistema operativo e usa il comando appropriato
+                system = platform.system()
+
+                if system == 'Windows':
+                    # Per Windows: usa explorer.exe
+                    subprocess.Popen(f'explorer "{file_path}"')
+
+                elif system == 'Sequoia':  # macOS
+                    # Per macOS: usa il comando open
+                    subprocess.Popen(['open', file_path])
+                with chatlog_lock:
+                    chatlog = chatlog + "\n" + time_stamp_and_user_name + ": Ha inviato un file"
+                    dpg.set_value("chatlog_field", chatlog)
+            else:
+                with chatlog_lock:
+                    chatlog = chatlog + "\n" + msg
+                    dpg.set_value("chatlog_field", chatlog)
         except Exception as e:
             print(f"Error in listen_to_server: {e}")
             break
 
 
-def send_msg():
-    global client_socket, chatlog, current_username
+def send():
+    global client_socket, chatlog, current_username, ftp_server
     msg = dpg.get_value("input_txt")
-    if not msg:
+    file_field = dpg.get_value("file_field")
+
+    # Verifica se sono entrambi vuoti
+    if not msg and not file_field:
+        print("Niente da inviare: sia messaggio che file sono vuoti")
         return
 
     timestamp = str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    formatted_msg = f"{timestamp} - {current_username}: {msg}"
 
-    try:
-        client_socket.send(formatted_msg.encode("utf-8"))
-        with chatlog_lock:
-            chatlog = chatlog + "\n" + formatted_msg
-        dpg.set_value("input_txt", "")
-    except Exception as e:
-        dpg.set_value("logerr", f"Errore durante l'invio del messaggio: {str(e)}")
+    # Priorità all'invio del file
+    if file_field:
+        print(f"Tentativo di invio file: {file_field}")
+        try:
+            # Forza una riconnessione FTP
+            print("Effettuo una nuova connessione FTP...")
+            setup_connection_server_FTP()
+
+            # Invia notifica al client
+            client_socket.send("sending_file".encode("utf-8"))
+            client_socket.send(f"{timestamp} - {current_username}".encode("utf-8"))
+
+            # Invia il file
+            with open(file_field, 'rb') as file:
+                name_file = os.path.basename(file_field)
+                print(f"Invio del file {name_file} in corso...")
+                ftp_server.storbinary(f"STOR {name_file}", file)
+                print(f"File {name_file} inviato con successo")
+
+                # Aggiungi messaggio al log della chat
+                with chatlog_lock:
+                    chatlog = chatlog + f"\n{timestamp} - {current_username}: Ha inviato un file ({name_file})"
+                    dpg.set_value("chatlog_field", chatlog)
+
+                # Pulisci il campo file dopo l'invio
+                dpg.set_value("file_field", "")
+        except Exception as e:
+            print(f"Errore nell'invio del file: {e}")
+    elif msg:  # Solo se c'è un messaggio e non un file
+        formatted_msg = f"{timestamp} - {current_username}: {msg}"
+        try:
+            client_socket.send(formatted_msg.encode("utf-8"))
+            with chatlog_lock:
+                chatlog = chatlog + "\n" + formatted_msg
+            dpg.set_value("input_txt", "")
+        except Exception as e:
+            dpg.set_value("logerr", f"Errore durante l'invio del messaggio: {str(e)}")
+
 
 
 def center_items():
@@ -180,9 +292,59 @@ def center_items():
     dpg.set_item_width("file_button", 100)
     dpg.configure_item("file_button", height=INPUT_HEIGHT)
 
-def carica_file():
-    pass
 
+def carica_file():
+    if getattr(carica_file, 'in_progress', False):
+        return
+
+    carica_file.in_progress = True
+    dpg.configure_item("file_button", enabled=False)
+
+    # Crea un file temporaneo per comunicare il risultato
+    temp_file = tempfile.mktemp()
+
+    # Crea un piccolo script Python da eseguire
+    script_file = tempfile.mktemp(suffix='.py')
+    with open(script_file, 'w') as f:
+        f.write("""
+import tkinter as tk
+from tkinter import filedialog
+import sys
+
+root = tk.Tk()
+root.withdraw()
+file_path = filedialog.askopenfilename(
+    title="Seleziona un file",
+    filetypes=[("Tutti i file", "*"), ("File di testo", "*.txt")]
+)
+
+if file_path:
+    with open(sys.argv[1], 'w') as f:
+        f.write(file_path)
+""")
+
+    # Esegui lo script in un processo separato
+    subprocess.run([sys.executable, script_file, temp_file], check=False)
+
+    try:
+        # Leggi il risultato
+        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+            with open(temp_file, 'r') as f:
+                file_path = f.read().strip()
+                if file_path:
+                    dpg.set_value("file_field", file_path)
+    finally:
+        # Pulisci i file temporanei
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+            if os.path.exists(script_file):
+                os.remove(script_file)
+        except:
+            pass
+
+        dpg.configure_item("file_button", enabled=True)
+        carica_file.in_progress = False
 
 def create_gui():
     with dpg.window(label="Chat", tag="window"):
@@ -221,9 +383,9 @@ def create_gui():
                     track_offset=1)
                 dpg.add_spacer(height=SPACING)
                 with dpg.group(horizontal=True):
-                    dpg.add_input_text(tag="input_txt", multiline=True, on_enter=True, callback=send_msg)
+                    dpg.add_input_text(tag="input_txt", multiline=True)
                     dpg.add_spacer(width=SPACING)  # Spaziatore a destra
-                    dpg.add_button(label="Invia", tag="send_button", callback=send_msg)
+                    dpg.add_button(label="Invia", tag="send_button", callback=send)
 
                 dpg.add_spacer(height=5)
 
