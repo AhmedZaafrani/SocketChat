@@ -279,7 +279,7 @@ def download_file(time_stamp_and_user_name, filename):
                 if system == 'Windows':
                     # Per Windows: usa explorer.exe
                     subprocess.Popen(f'explorer /select,"{file_path}"')
-                elif system == 'Darwin' or system == 'Sequoia':  # macOS o Sequoia
+                elif system == 'Darwin':  # macOS o Sequoia
                     # Per macOS: usa il comando open
                     subprocess.Popen(['open', '-R', file_path])
                 else:  # Linux e altri sistemi
@@ -419,7 +419,7 @@ def select_download_folder():
     # Determina il sistema operativo
     system = platform.system()
 
-    if system == 'Darwin' or system == 'Sequoia':  # macOS o Sequoia
+    if system == 'Darwin':  # macOS o Sequoia
         # Usa AppleScript direttamente per un dialogo di selezione cartella nativo
         # che sarà sempre in primo piano
         applescript = f'''
