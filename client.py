@@ -7,6 +7,9 @@ import socket
 import datetime
 from string import whitespace
 from ftplib import FTP
+from pyftpdlib.authorizers import DummyAuthorizer
+from pyftpdlib.handlers import FTPHandler
+from pyftpdlib.servers import FTPServer
 import platform
 import subprocess
 import time
@@ -18,7 +21,7 @@ from dearpygui.dearpygui import configure_item
 
 from server import server_socket
 
-SERVER_IP = '172.20.10.2'
+SERVER_IP = '127.0.0.1'
 DEFAULT_PORT = 12345
 BUFFER_SIZE = 1024
 
@@ -31,6 +34,7 @@ client_socket = None
 server_started = False
 current_username = ""
 ftp_server = None
+ftp_client = None
 
 # Variabile globale per tracciare lo stato
 file_selection_in_progress = False
@@ -44,6 +48,8 @@ LOGIN_FORM_WIDTH_RATIO = 0.65  # 50% della larghezza della viewport
 
 def setup_connection_server_FTP():
     global ftp_server
+    global ftp_client
+
     try:
         # Chiudi qualsiasi connessione esistente
         if ftp_server:
@@ -72,7 +78,23 @@ def setup_connection_server_FTP():
         return True
     except Exception as e:
         print(f"Errore nella connessione FTP: {e}")
-        raise e
+
+    try:
+        authorizer = DummyAuthorizer()
+        authorizer.add_user(
+            username="Server",
+            password="Server",
+            homedir="/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp",
+            perm="elradfmwMT"  # ogni lettera è un permesso
+        )
+
+        handler = FTPHandler
+        handler.authorizer = authorizer
+        server_FTP = FTPServer(("0.0.0.0", 12347), handler)
+        server_FTP.serve_forever()
+
+    except Exception as e:
+        print(f"Errore nella creazione del client FTP: {e}")
 
 
 def register():

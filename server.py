@@ -13,7 +13,7 @@ server_socket = None
 clients = []
 lock = threading.Lock()
 USERS_FILE = "users.json"
-SERVER_IP = '172.20.10.2'
+SERVER_IP = '127.0.0.1'
 PORT = 12345
 MAX_CONNECTIONS = 10
 authorizer = None
@@ -124,6 +124,11 @@ def handle_client_connection(client, address):
                 if message == "closed connection":
                     break
 
+                if message == "sending_file":
+                    # Avvia il distributore di file in un altro thread
+                    distributor_thread = threading.Thread(target=file_distributor)
+                    distributor_thread.start()
+
                 parts = message.split(" - ", 1)
                 if len(parts) == 2:
                     timestamp, text = parts
@@ -158,6 +163,16 @@ def listen_for_clients():
             print(f"Errore nell'accettare connessioni: {e}")
             break
 
+def file_distributor():
+    for client in clients:
+        if client != sender_client:
+            try:
+                client.send(message.encode('utf-8'))
+            except Exception as e:
+                print(f"Errore nell'invio a un client: {e}")
+                client.close()
+                if client in clients:
+                    clients.remove(client)
 
 def messaggio_broadcast(message, sender_client):
     with open("chat_log.txt", "a", encoding="utf-8") as log_file:
@@ -188,11 +203,6 @@ def start_server():
     server_ftp_thread = threading.Thread(target=setup_server_FTP)
     server_ftp_thread.daemon = True
     server_ftp_thread.start()
-
-    # Avvia il distributore di file in un altro thread
-    #distributor_thread = threading.Thread(target=file_distributor)
-    #distributor_thread.daemon = True
-    #distributor_thread.start()
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
