@@ -48,7 +48,7 @@ LOGIN_FORM_WIDTH_RATIO = 0.65  # 50% della larghezza della viewport
 
 def setup_connection_server_FTP():
     global ftp_server
-    global ftp_client
+    global current_username
 
     try:
         # Chiudi qualsiasi connessione esistente
@@ -62,9 +62,11 @@ def setup_connection_server_FTP():
         ftp_server = FTP()
         ftp_server.connect(SERVER_IP, 12346)
 
-        # Debug: mostra credenziali
+        # Ottieni le credenziali
         username = current_username
         password = dpg.get_value("password")
+
+        # Debug: mostra credenziali
         print(f"Tentativo login FTP con: {username}:{password}")
 
         # Login con metodo standard
@@ -78,23 +80,7 @@ def setup_connection_server_FTP():
         return True
     except Exception as e:
         print(f"Errore nella connessione FTP: {e}")
-
-    try:
-        authorizer = DummyAuthorizer()
-        authorizer.add_user(
-            username="Server",
-            password="Server",
-            homedir="/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp",
-            perm="elradfmwMT"  # ogni lettera è un permesso
-        )
-
-        handler = FTPHandler
-        handler.authorizer = authorizer
-        server_FTP = FTPServer(("0.0.0.0", 12347), handler)
-        server_FTP.serve_forever()
-
-    except Exception as e:
-        print(f"Errore nella creazione del client FTP: {e}")
+        return False
 
 
 def register():
@@ -147,22 +133,32 @@ def login():
             client_socket.close()
             return
 
-        # Solo dopo l'autenticazione riuscita, connettiti al server FTP
-        try:
-            setup_connection_server_FTP()
-        except Exception as e:
-            print(f"Errore nella connessione FTP: {e}")
-            # Continua comunque con la chat anche se la connessione FTP fallisce
-
+        # Salva username prima di configurare FTP
         current_username = username
+
+        # Solo dopo l'autenticazione riuscita, connettiti al server FTP
+        ftp_success = setup_connection_server_FTP()
+        if not ftp_success:
+            print("Avviso: La connessione FTP non è riuscita, ma la chat funzionerà comunque")
+            # Non interrompere l'esecuzione, continua con la chat anche se FTP fallisce
+
+        # Avvia thread di ascolto
         listen_thread = threading.Thread(target=listen_to_server)
         listen_thread.daemon = True
         listen_thread.start()
 
+        # Mostra la scheda di chat e abilita visivamente
         dpg.configure_item("chat", show=True)
-        dpg.set_value("tabbar", "chat")
+        dpg.set_value("tabbar", "chat")  # Cambia tab
+        dpg.configure_item("login", show=False)  # Nascondi login tab
+
+        # Pulisci messaggio di errore
         dpg.set_value("logerr", "")
+
+        # Aggiorna il flag di server
         server_started = True
+
+        print(f"Login riuscito come {username}, GUI aggiornata")
 
     except Exception as e:
         dpg.set_value("logerr", f"Errore durante il login: {str(e)}")
@@ -177,33 +173,140 @@ def listen_to_server():
             msg = client_socket.recv(BUFFER_SIZE).decode("utf-8")
             if not msg:
                 break
-            elif msg == "sending_file":
+
+            print(f"Messaggio ricevuto: {msg}")  # Debug
+
+            if msg == "sending_file":
+                print("Rilevata notifica di invio file")
+
+                # Ricevi timestamp e nome utente
                 time_stamp_and_user_name = client_socket.recv(BUFFER_SIZE).decode("utf-8")
+                print(f"Ricevuto timestamp e utente: {time_stamp_and_user_name}")
 
-                download_path = "/Users/simo/Documents/GitHub/Senza nome/SocketChat/client_downloaded_file"  # Definisci un percorso dove verranno scaricati i file
-                file_path = os.path.join(download_path, "nome_file_scaricato")
-                file_path = os.path.abspath(file_path)
+                # Ricevi il nome del file
+                filename = client_socket.recv(BUFFER_SIZE).decode("utf-8")
+                print(f"Ricevuto nome file: {filename}")
 
-                # Controlla il sistema operativo e usa il comando appropriato
-                system = platform.system()
+                # Crea un thread separato per il download del file
+                # Questo evita il blocco del thread principale durante il download
+                download_thread = threading.Thread(
+                    target=download_file,
+                    args=(time_stamp_and_user_name, filename),
+                    daemon=True
+                )
+                download_thread.start()
 
-                if system == 'Windows':
-                    # Per Windows: usa explorer.exe
-                    subprocess.Popen(f'explorer "{file_path}"')
-
-                elif system == 'Sequoia':  # macOS
-                    # Per macOS: usa il comando open
-                    subprocess.Popen(['open', file_path])
-                with chatlog_lock:
-                    chatlog = chatlog + "\n" + time_stamp_and_user_name + ": Ha inviato un file"
-                    dpg.set_value("chatlog_field", chatlog)
             else:
+                # Messaggi normali
                 with chatlog_lock:
                     chatlog = chatlog + "\n" + msg
                     dpg.set_value("chatlog_field", chatlog)
+
         except Exception as e:
             print(f"Error in listen_to_server: {e}")
             break
+
+    print("Thread di ascolto terminato")
+
+
+def download_file(time_stamp_and_user_name, filename):
+    """Thread separato per gestire il download di un file"""
+    global ftp_server, chatlog
+
+    try:
+        # Controlla se esiste una cartella di download configurata
+        download_folder = dpg.get_value("download_folder")
+        if not download_folder:
+            download_folder = os.path.expanduser("~/Downloads")  # Default
+            print(f"Usando cartella di download predefinita: {download_folder}")
+
+        # Assicurati che la cartella esista
+        if not os.path.exists(download_folder):
+            os.makedirs(download_folder)
+            print(f"Creata cartella di download: {download_folder}")
+
+        # Percorso completo del file da scaricare
+        file_path = os.path.join(download_folder, filename)
+        print(f"Percorso completo del file: {file_path}")
+
+        # Attendi un po' prima di iniziare il download
+        # Questo dà tempo al server FTP di completare il caricamento
+        time.sleep(1)
+
+        # Tenta di riconnettersi all'FTP per diverse volte
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            try:
+                print(f"Tentativo di connessione FTP {attempt + 1}/{max_attempts}...")
+                ftp_success = setup_connection_server_FTP()
+
+                if not ftp_success:
+                    print(f"Tentativo {attempt + 1} fallito, riprovo...")
+                    time.sleep(2)  # Attesa tra i tentativi
+                    continue
+
+                # Lista i file disponibili (debug)
+                print("File disponibili sul server:")
+                files = ftp_server.nlst()
+                print(files)
+
+                if filename not in files:
+                    print(f"File {filename} non trovato sul server, riprovo...")
+                    time.sleep(2)
+                    continue
+
+                # Scarica il file
+                with open(file_path, 'wb') as local_file:
+                    print(f"Tentativo di download di {filename}...")
+                    ftp_server.retrbinary(f"RETR {filename}", local_file.write)
+
+                print(f"File scaricato con successo in: {file_path}")
+
+                # Se siamo arrivati qui, il download è riuscito
+                break
+
+            except Exception as e:
+                print(f"Errore durante il tentativo {attempt + 1} di download: {e}")
+                time.sleep(2)  # Attesa tra i tentativi
+
+        # Verifica se il file esiste e ha dimensione > 0
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+            # Apri la cartella di download nel file explorer
+            system = platform.system()
+            print(f"Sistema operativo rilevato: {system}")
+
+            try:
+                if system == 'Windows':
+                    # Per Windows: usa explorer.exe
+                    subprocess.Popen(f'explorer /select,"{file_path}"')
+                elif system == 'Darwin' or system == 'Sequoia':  # macOS o Sequoia
+                    # Per macOS: usa il comando open
+                    subprocess.Popen(['open', '-R', file_path])
+                else:  # Linux e altri sistemi
+                    subprocess.Popen(['xdg-open', os.path.dirname(file_path)])
+
+                print("File explorer aperto correttamente")
+
+                # Aggiorna il log della chat per indicare download completato
+                with chatlog_lock:
+                    chatlog = chatlog + "\n" + time_stamp_and_user_name + f": Ha inviato un file ({filename}) - Download completato"
+                    dpg.set_value("chatlog_field", chatlog)
+
+            except Exception as e:
+                print(f"Errore nell'apertura del file explorer: {e}")
+        else:
+            print(f"Download fallito: file {filename} non trovato o vuoto")
+            # Aggiorna comunque il log della chat
+            with chatlog_lock:
+                chatlog = chatlog + "\n" + time_stamp_and_user_name + f": Ha inviato un file ({filename}) - Download fallito"
+                dpg.set_value("chatlog_field", chatlog)
+
+    except Exception as e:
+        print(f"Errore durante il download del file: {e}")
+        # Aggiorna il log della chat anche in caso di errore
+        with chatlog_lock:
+            chatlog = chatlog + "\n" + time_stamp_and_user_name + f": Ha inviato un file ({filename}) - Errore nel download"
+            dpg.set_value("chatlog_field", chatlog)
 
 
 def send():
@@ -222,40 +325,167 @@ def send():
     if file_field:
         print(f"Tentativo di invio file: {file_field}")
         try:
+            # Verifica che il file esista
+            if not os.path.exists(file_field):
+                error_msg = f"Errore: il file {file_field} non esiste"
+                print(error_msg)
+                dpg.set_value("logerr", error_msg)
+                return
+
+            # Verifica che il file non sia vuoto
+            if os.path.getsize(file_field) == 0:
+                error_msg = "Errore: il file è vuoto"
+                print(error_msg)
+                dpg.set_value("logerr", error_msg)
+                return
+
+            # Ottieni il nome del file dal percorso
+            name_file = os.path.basename(file_field)
+
             # Forza una riconnessione FTP
             print("Effettuo una nuova connessione FTP...")
-            setup_connection_server_FTP()
+            ftp_success = setup_connection_server_FTP()
 
-            # Invia notifica al client
-            client_socket.send("sending_file".encode("utf-8"))
-            client_socket.send(f"{timestamp} - {current_username}".encode("utf-8"))
+            if not ftp_success:
+                dpg.set_value("logerr", "Errore nella connessione FTP. Impossibile inviare il file.")
+                return
 
-            # Invia il file
+            # Aggiungi messaggio al log della chat (prima dell'invio)
+            with chatlog_lock:
+                chatlog = chatlog + f"\n{timestamp} - {current_username}: Invio del file {name_file} in corso..."
+                dpg.set_value("chatlog_field", chatlog)
+
+            # Invia il file tramite FTP
             with open(file_field, 'rb') as file:
-                name_file = os.path.basename(file_field)
                 print(f"Invio del file {name_file} in corso...")
                 ftp_server.storbinary(f"STOR {name_file}", file)
                 print(f"File {name_file} inviato con successo")
 
-                # Aggiungi messaggio al log della chat
-                with chatlog_lock:
-                    chatlog = chatlog + f"\n{timestamp} - {current_username}: Ha inviato un file ({name_file})"
-                    dpg.set_value("chatlog_field", chatlog)
+            # Dopo il caricamento FTP, notifica il server
+            client_socket.send("sending_file".encode("utf-8"))
+            time.sleep(0.1)  # Piccola pausa per assicurarsi che i messaggi non si sovrappongano
+            client_socket.send(name_file.encode("utf-8"))
 
-                # Pulisci il campo file dopo l'invio
-                dpg.set_value("file_field", "")
+            # Aggiorna il messaggio nel log della chat
+            with chatlog_lock:
+                chatlog = chatlog + f"\n{timestamp} - {current_username}: File {name_file} inviato con successo"
+                dpg.set_value("chatlog_field", chatlog)
+
+            # Pulisci il campo file dopo l'invio
+            dpg.set_value("file_field", "")
+
+            # Pulisci eventuali messaggi di errore
+            dpg.set_value("logerr", "")
+
         except Exception as e:
-            print(f"Errore nell'invio del file: {e}")
+            error_msg = f"Errore nell'invio del file: {e}"
+            print(error_msg)
+            dpg.set_value("logerr", error_msg)
+
+            # Aggiorna il log con l'errore
+            with chatlog_lock:
+                chatlog = chatlog + f"\n{timestamp} - {current_username}: Errore nell'invio del file {os.path.basename(file_field)}"
+                dpg.set_value("chatlog_field", chatlog)
+
     elif msg:  # Solo se c'è un messaggio e non un file
-        formatted_msg = f"{timestamp} - {current_username}: {msg}"
         try:
+            # Invia il messaggio con timestamp
+            formatted_msg = f"{timestamp} - {current_username}: {msg}"
             client_socket.send(formatted_msg.encode("utf-8"))
+
             with chatlog_lock:
                 chatlog = chatlog + "\n" + formatted_msg
-            dpg.set_value("input_txt", "")
-        except Exception as e:
-            dpg.set_value("logerr", f"Errore durante l'invio del messaggio: {str(e)}")
+                dpg.set_value("chatlog_field", chatlog)
 
+            dpg.set_value("input_txt", "")
+
+        except Exception as e:
+            error_msg = f"Errore durante l'invio del messaggio: {str(e)}"
+            print(error_msg)
+            dpg.set_value("logerr", error_msg)
+
+
+def select_download_folder():
+    """Apre un dialog per selezionare la cartella di download dei file, usando AppleScript per macOS"""
+    if getattr(select_download_folder, 'in_progress', False):
+        return
+
+    select_download_folder.in_progress = True
+    dpg.configure_item("set_download_folder_button", enabled=False)
+
+    # Crea un file temporaneo per comunicare il risultato
+    temp_file = tempfile.mktemp()
+
+    # Determina il sistema operativo
+    system = platform.system()
+
+    if system == 'Darwin' or system == 'Sequoia':  # macOS o Sequoia
+        # Usa AppleScript direttamente per un dialogo di selezione cartella nativo
+        # che sarà sempre in primo piano
+        applescript = f'''
+        tell application "System Events"
+            activate
+        end tell
+        set selectedFolder to choose folder with prompt "Seleziona cartella per i file scaricati"
+        set folderPath to POSIX path of selectedFolder
+        do shell script "echo " & quoted form of folderPath & " > {temp_file}"
+        '''
+
+        try:
+            # Esegui AppleScript
+            subprocess.run(["osascript", "-e", applescript], check=False)
+        except Exception as e:
+            print(f"Errore nell'esecuzione di AppleScript: {e}")
+    else:
+        # Per Windows e altri sistemi, usa il metodo Tkinter come prima
+        script_file = tempfile.mktemp(suffix='.py')
+        with open(script_file, 'w') as f:
+            f.write("""
+import tkinter as tk
+from tkinter import filedialog
+import sys
+
+root = tk.Tk()
+root.attributes('-topmost', True)
+root.withdraw()
+folder_path = filedialog.askdirectory(
+    title="Seleziona cartella per i file scaricati"
+)
+
+if folder_path:
+    with open(sys.argv[1], 'w') as f:
+        f.write(folder_path)
+""")
+
+        # Esegui lo script in un processo separato
+        subprocess.run([sys.executable, script_file, temp_file], check=False)
+
+        # Pulisci il file dello script
+        try:
+            if os.path.exists(script_file):
+                os.remove(script_file)
+        except:
+            pass
+
+    try:
+        # Leggi il risultato
+        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+            with open(temp_file, 'r') as f:
+                folder_path = f.read().strip()
+                if folder_path:
+                    # Salva il percorso
+                    dpg.set_value("download_folder", folder_path)
+                    print(f"Cartella di download impostata: {folder_path}")
+    finally:
+        # Pulisci il file temporaneo
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        except:
+            pass
+
+        dpg.configure_item("set_download_folder_button", enabled=True)
+        select_download_folder.in_progress = False
 
 
 def center_items():
@@ -291,7 +521,8 @@ def center_items():
     # Aggiorna i componenti della chat
     chat_width = viewport_width - (SPACING * 2)  # Margine ai lati
     file_width = viewport_width - (SPACING * 2)  # Margine ai lati
-    chat_height = viewport_height - 200  # Spazio per inp e altri elementi
+    download_width = viewport_width - (SPACING * 2)  # Margine ai lati
+    chat_height = viewport_height - 250  # Spazio per input e altri elementi
 
     dpg.set_item_width("chatlog_field", chat_width)
     dpg.set_item_height("chatlog_field", chat_height)
@@ -314,8 +545,18 @@ def center_items():
     dpg.set_item_width("file_button", 100)
     dpg.configure_item("file_button", height=INPUT_HEIGHT)
 
+    # Aggiorna l'input della cartella di download
+    input_download_width = download_width - 180  # Spazio per il pulsante
+    dpg.set_item_width("download_folder", input_download_width)
+    dpg.configure_item("download_folder", height=INPUT_HEIGHT)
+
+    # Aggiorna dimensione pulsante cartella
+    dpg.set_item_width("set_download_folder_button", 160)
+    dpg.configure_item("set_download_folder_button", height=INPUT_HEIGHT)
+
 
 def carica_file():
+    """Apre un dialog per selezionare un file da inviare, usando AppleScript per macOS"""
     if getattr(carica_file, 'in_progress', False):
         return
 
@@ -325,18 +566,40 @@ def carica_file():
     # Crea un file temporaneo per comunicare il risultato
     temp_file = tempfile.mktemp()
 
-    # Crea un piccolo script Python da eseguire
-    script_file = tempfile.mktemp(suffix='.py')
-    with open(script_file, 'w') as f:
-        f.write("""
+    # Determina il sistema operativo
+    system = platform.system()
+
+    if system == 'Darwin' or system == 'Sequoia':  # macOS o Sequoia
+        # Usa AppleScript direttamente per un dialogo di selezione file nativo
+        # che sarà sempre in primo piano
+        applescript = f'''
+        tell application "System Events"
+            activate
+        end tell
+        set selectedFile to choose file with prompt "Seleziona un file da inviare"
+        set filePath to POSIX path of selectedFile
+        do shell script "echo " & quoted form of filePath & " > {temp_file}"
+        '''
+
+        try:
+            # Esegui AppleScript
+            subprocess.run(["osascript", "-e", applescript], check=False)
+        except Exception as e:
+            print(f"Errore nell'esecuzione di AppleScript: {e}")
+    else:
+        # Per Windows e altri sistemi, usa il metodo Tkinter come prima
+        script_file = tempfile.mktemp(suffix='.py')
+        with open(script_file, 'w') as f:
+            f.write("""
 import tkinter as tk
 from tkinter import filedialog
 import sys
 
 root = tk.Tk()
+root.attributes('-topmost', True)
 root.withdraw()
 file_path = filedialog.askopenfilename(
-    title="Seleziona un file",
+    title="Seleziona un file da inviare",
     filetypes=[("Tutti i file", "*"), ("File di testo", "*.txt")]
 )
 
@@ -345,8 +608,15 @@ if file_path:
         f.write(file_path)
 """)
 
-    # Esegui lo script in un processo separato
-    subprocess.run([sys.executable, script_file, temp_file], check=False)
+        # Esegui lo script in un processo separato
+        subprocess.run([sys.executable, script_file, temp_file], check=False)
+
+        # Pulisci il file dello script
+        try:
+            if os.path.exists(script_file):
+                os.remove(script_file)
+        except:
+            pass
 
     try:
         # Leggi il risultato
@@ -355,18 +625,18 @@ if file_path:
                 file_path = f.read().strip()
                 if file_path:
                     dpg.set_value("file_field", file_path)
+                    print(f"File selezionato: {file_path}")
     finally:
-        # Pulisci i file temporanei
+        # Pulisci il file temporaneo
         try:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
-            if os.path.exists(script_file):
-                os.remove(script_file)
         except:
             pass
 
         dpg.configure_item("file_button", enabled=True)
         carica_file.in_progress = False
+
 
 def create_gui():
     with dpg.window(label="Chat", tag="window"):
@@ -404,6 +674,8 @@ def create_gui():
                     tag="chatlog_field", multiline=True, readonly=True, tracked=True,
                     track_offset=1)
                 dpg.add_spacer(height=SPACING)
+
+                # Gruppo per il messaggio di testo
                 with dpg.group(horizontal=True):
                     dpg.add_input_text(tag="input_txt", multiline=True)
                     dpg.add_spacer(width=SPACING)  # Spaziatore a destra
@@ -411,10 +683,21 @@ def create_gui():
 
                 dpg.add_spacer(height=5)
 
+                # Gruppo per la selezione del file
                 with dpg.group(horizontal=True):
                     dpg.add_input_text(tag="file_field", multiline=True, readonly=True)
                     dpg.add_spacer(width=SPACING)  # Spaziatore a destra
                     dpg.add_button(label="File", tag="file_button", callback=carica_file)
+
+                dpg.add_spacer(height=5)
+
+                # Gruppo per la cartella di download
+                with dpg.group(horizontal=True):
+                    dpg.add_input_text(tag="download_folder", multiline=True, readonly=True,
+                                       default_value=os.path.expanduser("~/Downloads"))
+                    dpg.add_spacer(width=SPACING)
+                    dpg.add_button(label="Set Download Folder", tag="set_download_folder_button",
+                                   callback=select_download_folder)
 
 
 

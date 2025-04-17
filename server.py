@@ -1,13 +1,13 @@
 import threading
 import socket
 import datetime
+import time
 import json
 import os
 from ftplib import FTP
 from pyftpdlib.authorizers import DummyAuthorizer
 from pyftpdlib.handlers import FTPHandler
 from pyftpdlib.servers import FTPServer
-
 
 server_socket = None
 clients = []
@@ -17,25 +17,54 @@ SERVER_IP = '127.0.0.1'
 PORT = 12345
 MAX_CONNECTIONS = 10
 authorizer = None
+server_FTP = None
+
 
 def setup_server_FTP():
-    global authorizer
+    global authorizer, server_FTP
     dict = load_users()
     authorizer = DummyAuthorizer()
+
     # Itera sulle coppie chiave-valore (username, password)
     for username, password in dict.items():
-        authorizer.add_user(
-            username=username,
-            password=password,
-            homedir="/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp",
-            perm="elradfmwMT"  # ogni lettera è un permesso
-        )
+        # Crea la directory home se non esiste
+        home_dir = "/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp"
+        if not os.path.exists(home_dir):
+            try:
+                os.makedirs(home_dir)
+                print(f"Directory creata: {home_dir}")
+            except Exception as e:
+                print(f"Errore nella creazione della directory: {e}")
+
+        # Aggiungi l'utente
+        try:
+            authorizer.add_user(
+                username=username,
+                password=password,
+                homedir=home_dir,
+                perm="elradfmwMT"  # ogni lettera è un permesso
+            )
+            print(f"Utente FTP aggiunto: {username}")
+        except Exception as e:
+            print(f"Errore nell'aggiunta dell'utente FTP {username}: {e}")
+
+    # Aggiungi utente anonimo per debug
+    try:
+        authorizer.add_anonymous("/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp",
+                                 perm="elr")  # Permessi di sola lettura
+    except Exception as e:
+        print(f"Errore nell'aggiunta dell'utente anonimo: {e}")
 
     handler = FTPHandler
     handler.authorizer = authorizer
+    handler.banner = "FTP Server pronto"
 
-    server_FTP = FTPServer(("0.0.0.0", 12346), handler)
-    server_FTP.serve_forever()
+    try:
+        server_FTP = FTPServer(("0.0.0.0", 12346), handler)
+        print("Server FTP inizializzato correttamente")
+        server_FTP.serve_forever()
+    except Exception as e:
+        print(f"Errore nell'avvio del server FTP: {e}")
 
 def load_users():
     if not os.path.exists(USERS_FILE):
@@ -79,6 +108,8 @@ def handle_client_connection(client, address):
 
         print(f"Comando ricevuto da {address}: {data}")  # Debug
 
+        username = ""
+
         if data.startswith("REGISTER:"):
             _, username, password = data.split(":", 2)
             success, message = register_user(username, password)
@@ -88,12 +119,18 @@ def handle_client_connection(client, address):
                 client.close()
                 return
 
-            authorizer.add_user(
-                username=username,
-                password=password,
-                homedir="/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp",
-                perm="elradfmwMT"  # ogni lettera è un permesso
-            )
+            # Aggiungi l'utente all'authorizer FTP
+            try:
+                home_dir = "/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp"
+                authorizer.add_user(
+                    username=username,
+                    password=password,
+                    homedir=home_dir,
+                    perm="elradfmwMT"  # ogni lettera è un permesso
+                )
+                print(f"Utente FTP aggiunto: {username}")
+            except Exception as e:
+                print(f"Errore nell'aggiunta dell'utente FTP {username}: {e}")
 
         elif data.startswith("LOGIN:"):
             _, username, password = data.split(":", 2)
@@ -125,14 +162,44 @@ def handle_client_connection(client, address):
                     break
 
                 if message == "sending_file":
-                    # Avvia il distributore di file in un altro thread
-                    distributor_thread = threading.Thread(target=file_distributor)
-                    distributor_thread.start()
+                    # Ricevi il nome del file
+                    try:
+                        filename = client.recv(1024).decode('utf-8')
+                        print(f"Ricevuta notifica di invio file: {filename} da {username}")
+
+                        # Log dell'evento
+                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"{timestamp} - File {filename} ricevuto da {username}, avvio distribuzione...")
+
+                        # Attendi un momento per dare tempo al file di completare il caricamento
+                        time.sleep(0.5)
+
+                        # Verifica che il file esista
+                        file_path = os.path.join(
+                            "/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp", filename)
+                        if os.path.exists(file_path):
+                            print(
+                                f"File {filename} trovato in {file_path}, dimensione: {os.path.getsize(file_path)} bytes")
+
+                            # Avvia la distribuzione del file agli altri client in un thread separato
+                            file_distributor(client, filename, username)
+
+                            # Log del messaggio di condivisione file
+                            messaggio_broadcast(f"{timestamp} - {username}: Ha condiviso il file {filename}", client)
+                        else:
+                            print(f"ERRORE: File {filename} non trovato in {file_path}")
+                    except Exception as e:
+                        print(f"Errore durante la gestione dell'invio file: {e}")
+                    continue
 
                 parts = message.split(" - ", 1)
                 if len(parts) == 2:
-                    timestamp, text = parts
-                    messaggio_broadcast(f"{timestamp} - {username}: {text}", client)
+                    timestamp, message_content = parts
+                    # Controlla se il messaggio è già formattato con username
+                    if ":" in message_content:
+                        messaggio_broadcast(message, client)
+                    else:
+                        messaggio_broadcast(f"{timestamp} - {username}: {message_content}", client)
                 else:
                     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     messaggio_broadcast(f"{timestamp} - {username}: {message}", client)
@@ -147,7 +214,8 @@ def handle_client_connection(client, address):
         with lock:
             if client in clients:
                 clients.remove(client)
-                messaggio_broadcast(f"{username} ha lasciato la chat", client)
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                messaggio_broadcast(f"{timestamp} - {username} ha lasciato la chat", None)
                 print(f"{username} ha lasciato la chat")
                 client.close()
 
@@ -163,16 +231,91 @@ def listen_for_clients():
             print(f"Errore nell'accettare connessioni: {e}")
             break
 
-def file_distributor():
-    for client in clients:
-        if client != sender_client:
+
+def file_distributor(sender_client, filename, username):
+    """
+    Crea un thread separato per distribuire un file ricevuto da un client a tutti gli altri client
+
+    Args:
+        sender_client: Socket del client che ha inviato il file
+        filename: Nome del file da distribuire
+        username: Username del client che ha inviato il file
+    """
+    # Crea un thread per la distribuzione del file
+    distributor_thread = threading.Thread(
+        target=distribute_file_to_clients,
+        args=(sender_client, filename, username),
+        daemon=False  # Impostato a False per assicurarsi che termini completamente
+    )
+    distributor_thread.start()
+    print(f"Thread di distribuzione avviato per il file: {filename}")
+
+
+def distribute_file_to_clients(sender_client, filename, username):
+    """
+    Funzione eseguita in un thread separato per distribuire un file a tutti i client
+
+    Args:
+        sender_client: Socket del client che ha inviato il file
+        filename: Nome del file da distribuire
+        username: Username del client che ha inviato il file
+    """
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Path al file sul server
+    file_path = os.path.join("/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp", filename)
+
+    if not os.path.exists(file_path):
+        print(f"File {filename} non trovato per la distribuzione")
+        return
+
+    # Ottieni una copia della lista dei client per evitare modifiche durante l'iterazione
+    client_list = []
+    with lock:
+        client_list = clients.copy()
+
+    # Conta quanti client devono ricevere il file
+    client_count = sum(1 for client in client_list if client != sender_client)
+    print(f"Distribuzione del file {filename} da {username} a {client_count} client")
+
+    success_count = 0
+    fail_count = 0
+
+    for client in client_list:
+        if client == sender_client:
+            continue  # Salta il client che ha inviato il file
+
+        try:
+            # Invia notifica di file in arrivo
+            client.send("sending_file".encode('utf-8'))
+
+            # Breve pausa per assicurarsi che il client processi il messaggio
+            time.sleep(0.1)
+
+            # Invia timestamp e username del mittente
+            client.send(f"{timestamp} - {username}".encode('utf-8'))
+
+            # Breve pausa per assicurarsi che il client processi il messaggio
+            time.sleep(0.1)
+
+            # Invia nome del file
+            client.send(filename.encode('utf-8'))
+
+            print(f"Notifica di file inviata a un client: {filename} da {username}")
+            success_count += 1
+
+        except Exception as e:
+            print(f"Errore nell'invio della notifica file a un client: {e}")
+            fail_count += 1
             try:
-                client.send(message.encode('utf-8'))
-            except Exception as e:
-                print(f"Errore nell'invio a un client: {e}")
                 client.close()
+            except:
+                pass
+            with lock:
                 if client in clients:
                     clients.remove(client)
+
+    print(f"Distribuzione file completata: {success_count} successi, {fail_count} fallimenti")
 
 def messaggio_broadcast(message, sender_client):
     with open("chat_log.txt", "a", encoding="utf-8") as log_file:
@@ -188,7 +331,6 @@ def messaggio_broadcast(message, sender_client):
                 client.close()
                 if client in clients:
                     clients.remove(client)
-
 
 def start_server():
     global server_socket
