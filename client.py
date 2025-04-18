@@ -29,7 +29,7 @@ chatlog_lock = threading.Lock()
 chatlog = ""
 client_socket = None
 server_started = False
-current_username = ""
+nome_utente_personale = ""
 ftp_server = None
 ftp_client = None
 
@@ -45,7 +45,7 @@ LOGIN_FORM_WIDTH_RATIO = 0.65  # 50% della larghezza della viewport
 
 def setup_connection_server_FTP():
     global ftp_server
-    global current_username
+    global nome_utente_personale
 
     try:
         # Chiudi qualsiasi connessione esistente
@@ -60,7 +60,7 @@ def setup_connection_server_FTP():
         ftp_server.connect(SERVER_IP, 12346)
 
         # Ottieni le credenziali
-        username = current_username
+        username = nome_utente_personale
         password = dpg.get_value("password")
 
         # Debug: mostra credenziali
@@ -105,7 +105,7 @@ def register():
 
 
 def login():
-    global client_socket, server_started, current_username
+    global client_socket, server_started, nome_utente_personale
     username = dpg.get_value("username")
     password = dpg.get_value("password")
 
@@ -131,7 +131,7 @@ def login():
             return
 
         # Salva username prima di configurare FTP
-        current_username = username
+        nome_utente_personale = username
 
         # Solo dopo l'autenticazione riuscita, connettiti al server FTP
         ftp_success = setup_connection_server_FTP()
@@ -306,8 +306,8 @@ def download_file(time_stamp_and_user_name, filename):
             dpg.set_value("chatlog_field", chatlog)
 
 
-def send():
-    global client_socket, chatlog, current_username, ftp_server
+def invia():
+    global client_socket, chatlog, nome_utente_personale, ftp_server
     msg = dpg.get_value("input_txt")
     file_field = dpg.get_value("file_field")
 
@@ -349,7 +349,7 @@ def send():
 
             # Aggiungi messaggio al log della chat (prima dell'invio)
             with chatlog_lock:
-                chatlog = chatlog + f"\n{timestamp} - {current_username}: Invio del file {name_file} in corso..."
+                chatlog = chatlog + f"\n{timestamp} - {nome_utente_personale}: Invio del file {name_file} in corso..."
                 dpg.set_value("chatlog_field", chatlog)
 
             # Invia il file tramite FTP
@@ -365,7 +365,7 @@ def send():
 
             # Aggiorna il messaggio nel log della chat
             with chatlog_lock:
-                chatlog = chatlog + f"\n{timestamp} - {current_username}: File {name_file} inviato con successo"
+                chatlog = chatlog + f"\n{timestamp} - {nome_utente_personale}: File {name_file} inviato con successo"
                 dpg.set_value("chatlog_field", chatlog)
 
             # Pulisci il campo file dopo l'invio
@@ -381,13 +381,13 @@ def send():
 
             # Aggiorna il log con l'errore
             with chatlog_lock:
-                chatlog = chatlog + f"\n{timestamp} - {current_username}: Errore nell'invio del file {os.path.basename(file_field)}"
+                chatlog = chatlog + f"\n{timestamp} - {nome_utente_personale}: Errore nell'invio del file {os.path.basename(file_field)}"
                 dpg.set_value("chatlog_field", chatlog)
 
     elif msg:  # Solo se c'è un messaggio e non un file
         try:
             # Invia il messaggio con timestamp
-            formatted_msg = f"{timestamp} - {current_username}: {msg}"
+            formatted_msg = f"{timestamp} - {nome_utente_personale}: {msg}"
             client_socket.send(formatted_msg.encode("utf-8"))
 
             with chatlog_lock:
@@ -402,12 +402,12 @@ def send():
             dpg.set_value("logerr", error_msg)
 
 
-def select_download_folder():
+def seleziona_cartella_download():
     """Apre un dialog per selezionare la cartella di download dei file, usando AppleScript per macOS"""
-    if getattr(select_download_folder, 'in_progress', False):
+    if getattr(seleziona_cartella_download, 'in_progress', False):
         return
 
-    select_download_folder.in_progress = True
+    seleziona_cartella_download.in_progress = True
     dpg.configure_item("set_download_folder_button", enabled=False)
 
     # Crea un file temporaneo per comunicare il risultato
@@ -482,7 +482,7 @@ if folder_path:
             pass
 
         dpg.configure_item("set_download_folder_button", enabled=True)
-        select_download_folder.in_progress = False
+        seleziona_cartella_download.in_progress = False
 
 
 def center_items():
@@ -677,7 +677,7 @@ def create_gui():
                 with dpg.group(horizontal=True):
                     dpg.add_input_text(tag="input_txt", multiline=True)
                     dpg.add_spacer(width=SPACING)  # Spaziatore a destra
-                    dpg.add_button(label="Invia", tag="send_button", callback=send)
+                    dpg.add_button(label="Invia", tag="send_button", callback=invia)
 
                 dpg.add_spacer(height=5)
 
@@ -691,15 +691,74 @@ def create_gui():
 
                 # Gruppo per la cartella di download
                 with dpg.group(horizontal=True):
-                    dpg.add_input_text(tag="download_folder", multiline=True, readonly=True,
+                    dpg.add_input_text(tag="cartella_download", multiline=True, readonly=True,
                                        default_value=os.path.expanduser("~/Downloads"))
                     dpg.add_spacer(width=SPACING)
-                    dpg.add_button(label="Set Download Folder", tag="set_download_folder_button",
-                                   callback=select_download_folder)
+                    dpg.add_button(label="Set Download Folder", tag="btn_selezione_cartella_download",
+                                   callback=seleziona_cartella_download)
+
             with dpg.tab(label="Chat private", tag="chat_private", show=False):
                 dpg.add_spacer(height=5)
-                with dpg.group(horizontal=False):
+                with dpg.group(horizontal=True):
+                    # finestra a sinistra con la lista dei contatti
+                    with dpg.child_window(tag="pannello_contatti", width=250, border=True):
+                        dpg.add_text("Contatti", color=[255, 255, 255])
+                        dpg.add_separator()
 
+                        # finestra con la lista dei contatti
+                        with dpg.child_window(tag="lista_contatti", height=-35, border=False):
+                            # I contatti saranno aggiunti in runtime nella lista (col pulsante apposito)
+                            pass
+
+                        # Pulsante per aggiungere nuovi contatti
+                        dpg.add_button(label="Aggiungi contatto", tag="btn_aggiungi_contatto",
+                                       callback=mostra_aggiungi_contatti, width=-1)
+
+                    # finestra a destra con la chat selezionata da visualizzare
+                    with dpg.child_window(tag="Chat_attiva", width=-1, border=True):
+                        # titolo/nome della chat
+                        with dpg.group(horizontal=True, tag="Nome_chat"):
+                            dpg.add_text("Seleziona una chat", tag="titolo_chat_attiva")
+
+                        dpg.add_separator()
+
+                        # Chat log privata
+                        dpg.add_input_text(tag="chatlog_field_privata", multiline=True,
+                                           readonly=True, height=-70, width=-1)
+
+                        # Area di input
+                        with dpg.group(horizontal=True):
+                            dpg.add_input_text(tag="input_txt_chat_privata", multiline=False, width=-100)
+                            dpg.add_button(label="Invia", tag="btn_invia_messaggio_privato",
+                                           callback=invia_messaggio_privato, width=80)
+
+
+def invia_messaggio_privato():
+    pass
+
+
+def start_chat_with(utente):
+    pass
+
+
+def mostra_aggiungi_contatti():
+    global utenti_disponibili
+
+    if dpg.does_item_exist("finestra_aggiungi_contatto"):
+        dpg.delete_item("finestra_aggiungi_contatto")
+
+    with dpg.window(label="Aggiungi contatto", tag="finestra_aggiungi_contatto",
+                    modal=True, width=300, height=400):
+        dpg.add_text("Utenti disponibili:")
+        dpg.add_separator()
+
+        with dpg.child_window(tag="lista_utenti_disponibili", height=300, width=-1):
+            for user in utenti_disponibili:
+                if user != nome_utente_personale:  # Non mostrare l'utente corrente
+                    dpg.add_button(label=user, tag=f"add_user_{user}",
+                                   callback=lambda s, a, u=user: start_chat_with(u), width=-1) #lambda è una funzione senza nome: s è
+
+        dpg.add_button(label="Chiudi", callback=lambda: dpg.delete_item("finestra_aggiungi_contatto"), width=-1)
 
 # Creazione dell'interfaccia
 create_gui()
