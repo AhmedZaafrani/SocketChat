@@ -11,6 +11,7 @@ from pyftpdlib.servers import FTPServer
 
 server_socket = None
 clients = []
+active_users = {}  # username -> socket
 lock = threading.Lock()
 USERS_FILE = "users.json"
 SERVER_IP = '127.0.0.1'
@@ -99,6 +100,17 @@ def authenticate_user(username, password):
     return True, "Autenticazione riuscita"
 
 
+def send_active_users_list():
+    users_list = list(active_users.keys())
+    users_data = json.dumps({"type": "users_list", "users": users_list})
+
+    for client in clients:
+        try:
+            client.send(users_data.encode('utf-8'))
+        except:
+            print(f"Errore nell'invio periodico degli utenti (clients) attivi a {client}")
+
+
 def handle_client_connection(client, address):
     try:
         # Ricevi il comando iniziale
@@ -148,6 +160,10 @@ def handle_client_connection(client, address):
         # Se arriviamo qui, l'utente è autenticato
         with lock:
             clients.append(client)
+            active_users[username] = client
+
+            send_active_users_list()
+            
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             messaggio_broadcast(f"{timestamp} - {username} si è unito alla chat", None)
             print(f"{username} si è unito alla chat")
@@ -192,17 +208,36 @@ def handle_client_connection(client, address):
                         print(f"Errore durante la gestione dell'invio file: {e}")
                     continue
 
-                parts = message.split(" - ", 1)
-                if len(parts) == 2:
-                    timestamp, message_content = parts
-                    # Controlla se il messaggio è già formattato con username
-                    if ":" in message_content:
-                        messaggio_broadcast(message, client)
-                    else:
-                        messaggio_broadcast(f"{timestamp} - {username}: {message_content}", client)
+                if message.startswith("PRIVATE:"):
+                    try:
+                        _, recipient, content = message.split(":", 2)
+                        if recipient in active_users:
+                            # Formatta il messaggio privato
+                            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            private_msg = f"PRIVATE:{timestamp} - {username}: {content}"
+
+                            active_users[recipient].send(private_msg.encode('utf-8'))
+
+                            # Invia conferma al mittente
+                            client.send(f"PRIVATE:{timestamp} - Tu -> {recipient}: {content}".encode('utf-8'))
+
+                            # Il server non tiene conto della cronologia della chat per evitare problemi di sicurezza. Lo farà il client
+                        else:
+                            client.send(f"ERROR: L'utente {recipient} non è connesso".encode('utf-8'))
+                    except Exception as e:
+                        print(f"Errore nell'invio del messaggio privato: {e}")
                 else:
-                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    messaggio_broadcast(f"{timestamp} - {username}: {message}", client)
+                    parts = message.split(" - ", 1)
+                    if len(parts) == 2:
+                        timestamp, message_content = parts
+                        # Controlla se il messaggio è già formattato con username
+                        if ":" in message_content:
+                            messaggio_broadcast(message, client)
+                        else:
+                            messaggio_broadcast(f"{timestamp} - {username}: {message_content}", client)
+                    else:
+                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        messaggio_broadcast(f"{timestamp} - {username}: {message}", client)
 
             except Exception as e:
                 print(f"Errore con client {username}: {e}")
@@ -217,7 +252,10 @@ def handle_client_connection(client, address):
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 messaggio_broadcast(f"{timestamp} - {username} ha lasciato la chat", None)
                 print(f"{username} ha lasciato la chat")
+                if username in active_users:
+                    del active_users[username] ## elimina il client con chiave username grazie al termine "del"
                 client.close()
+                send_active_users_list()
 
 
 def listen_for_clients():

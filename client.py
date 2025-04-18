@@ -15,11 +15,8 @@ import subprocess
 import time
 
 import dearpygui.dearpygui as dpg
-import tkinter as tk
 from tkfilebrowser import askopendirname, askopenfilename
 from dearpygui.dearpygui import configure_item
-
-from server import server_socket
 
 SERVER_IP = '127.0.0.1'
 DEFAULT_PORT = 12345
@@ -668,8 +665,9 @@ def create_gui():
                     dpg.add_spacer(tag="right_spacer", width=300)  # Spaziatore a destra
 
             # Tab Chat
-            with dpg.tab(label="Chat", tag="chat", show=False):
-                dpg.add_text("CHAT", tag="chat_title", color=[255, 255, 255])
+            with dpg.tab(label="chat_globale", tag="chat", show=False):
+                dpg.add_spacer(height=5)
+                dpg.add_text("CHAT GLOBALE", tag="chat_title", color=[255, 255, 255])
                 dpg.add_input_text(
                     tag="chatlog_field", multiline=True, readonly=True, tracked=True,
                     track_offset=1)
@@ -698,7 +696,9 @@ def create_gui():
                     dpg.add_spacer(width=SPACING)
                     dpg.add_button(label="Set Download Folder", tag="set_download_folder_button",
                                    callback=select_download_folder)
-
+            with dpg.tab(label="Chat private", tag="chat_private", show=False):
+                dpg.add_spacer(height=5)
+                with dpg.group(horizontal=False):
 
 
 # Creazione dell'interfaccia
