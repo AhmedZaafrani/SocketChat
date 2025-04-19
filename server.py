@@ -106,7 +106,7 @@ def send_active_users_list():
 
     for client in clients:
         try:
-            client.invia(users_data.encode('utf-8'))
+            client.send(users_data.encode('utf-8'))
         except:
             print(f"Errore nell'invio periodico degli utenti (clients) attivi a {client}")
 
@@ -125,7 +125,7 @@ def handle_client_connection(client, address):
         if data.startswith("REGISTER:"):
             _, username, password = data.split(":", 2)
             success, message = register_user(username, password)
-            client.invia(message.encode('utf-8'))
+            client.send(message.encode('utf-8'))
             print(f"Registrazione: {username} - {message}")  # Debug
             if not success:
                 client.close()
@@ -147,13 +147,13 @@ def handle_client_connection(client, address):
         elif data.startswith("LOGIN:"):
             _, username, password = data.split(":", 2)
             success, message = authenticate_user(username, password)
-            client.invia(message.encode('utf-8'))
+            client.send(message.encode('utf-8'))
             print(f"Login: {username} - {message}")  # Debug
             if not success:
                 client.close()
                 return
         else:
-            client.invia("Comando non valido".encode('utf-8'))
+            client.send("Comando non valido".encode('utf-8'))
             client.close()
             return
 
@@ -163,6 +163,7 @@ def handle_client_connection(client, address):
             active_users[username] = client
 
             send_active_users_list()
+            time.sleep(0.5)
             
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             messaggio_broadcast(f"{timestamp} - {username} si è unito alla chat", None)
@@ -209,23 +210,58 @@ def handle_client_connection(client, address):
                     continue
 
                 if message.startswith("PRIVATE:"):
-                    try:
-                        _, recipient, content = message.split(":", 2)
-                        if recipient in active_users:
-                            # Formatta il messaggio privato
-                            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            private_msg = f"PRIVATE:{timestamp} - {username}: {content}"
+                    if "sending_file:" in message:
+                        try:
+                            # Formato: PRIVATE:sending_file:destinatario:timestamp:nome_file
+                            parts = message.split(":", 4)
 
-                            active_users[recipient].invia(private_msg.encode('utf-8'))
+                            if len(parts) >= 4:
+                                # Estrai le informazioni dal messaggio
+                                recipient = parts[2]
+                                timestamp = parts[3]
 
-                            # Invia conferma al mittente
-                            client.invia(f"PRIVATE:{timestamp} - Tu -> {recipient}: {content}".encode('utf-8'))
+                                # Se ci sono 5 parti, abbiamo anche il nome del file
+                                filename = parts[4] if len(parts) == 5 else "file sconosciuto"
 
-                            # Il server non tiene conto della cronologia della chat per evitare problemi di sicurezza. Lo farà il client
-                        else:
-                            client.invia(f"ERROR: L'utente {recipient} non è connesso".encode('utf-8'))
-                    except Exception as e:
-                        print(f"Errore nell'invio del messaggio privato: {e}")
+                                print(f"File privato da {username} a {recipient}: {filename}")
+
+                                # Verifica che il destinatario sia connesso
+                                if recipient in active_users:
+                                    # Invia notifica al destinatario
+                                    # Formato: PRIVATE:sending_file:mittente:timestamp:nome_file
+                                    notification = f"PRIVATE:sending_file:{username}:{timestamp}:{filename}"
+                                    active_users[recipient].send(notification.encode('utf-8'))
+                                    print(f"Notifica di file inviata a {recipient}")
+                                else:
+                                    # Notifica al mittente che il destinatario non è online
+                                    error_msg = f"ERROR: Impossibile inviare il file. L'utente {recipient} non è connesso"
+                                    client.send(error_msg.encode('utf-8'))
+
+                        except Exception as e:
+                            print(f"Errore nella gestione del file privato: {e}")
+                    else:
+                        try:
+                            # Gestione messaggi privati normali
+                            parts = message.split(":", 2)
+                            if len(parts) == 3:
+                                _, recipient, content = parts
+                                print(f"Etrato in modalit private con recipient {recipient}")
+
+                                if recipient in active_users:
+                                    # Formatta il messaggio privato
+
+                                    print(f"{recipient} è in active users")
+                                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    private_msg = f"PRIVATE:{timestamp} - {username} --> {content}"
+
+                                    active_users[recipient].send(private_msg.encode('utf-8'))
+                                    print(f"messaggio ({private_msg}) inviato")
+
+                                    # Il server non tiene conto della cronologia della chat per evitare problemi di sicurezza
+                                else:
+                                    client.send(f"ERROR: L'utente {recipient} non è connesso".encode('utf-8'))
+                        except Exception as e:
+                            print(f"Errore nell'invio del messaggio privato: {e}")
                 else:
                     parts = message.split(" - ", 1)
                     if len(parts) == 2:
@@ -320,24 +356,24 @@ def distribute_file_to_clients(sender_client, filename, username):
     fail_count = 0
 
     for client in client_list:
-        if client == sender_client:
-            continue  # Salta il client che ha inviato il file
+        #if client == sender_client:
+       #     continue  # Salta il client che ha inviato il file
 
         try:
             # Invia notifica di file in arrivo
-            client.invia("sending_file".encode('utf-8'))
+            client.send("sending_file".encode('utf-8'))
 
             # Breve pausa per assicurarsi che il client processi il messaggio
             time.sleep(0.1)
 
             # Invia timestamp e username del mittente
-            client.invia(f"{timestamp} - {username}".encode('utf-8'))
+            client.send(f"{timestamp} - {username}".encode('utf-8'))
 
             # Breve pausa per assicurarsi che il client processi il messaggio
             time.sleep(0.1)
 
             # Invia nome del file
-            client.invia(filename.encode('utf-8'))
+            client.send(filename.encode('utf-8'))
 
             print(f"Notifica di file inviata a un client: {filename} da {username}")
             success_count += 1
@@ -363,7 +399,7 @@ def messaggio_broadcast(message, sender_client):
     for client in clients:
         if client != sender_client:
             try:
-                client.invia(message.encode('utf-8'))
+                client.send(message.encode('utf-8'))
             except Exception as e:
                 print(f"Errore nell'invio a un client: {e}")
                 client.close()

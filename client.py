@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -27,6 +28,7 @@ dpg.create_viewport(title='Socket Chat', width=950, height=800)
 
 chatlog_lock = threading.Lock()
 chatlog = ""
+download_folders = {}  # username -> cartella di download per la chat
 client_socket = None
 server_started = False
 nome_utente_personale = ""
@@ -41,6 +43,40 @@ BUTTON_HEIGHT = 40
 INPUT_HEIGHT = 35
 SPACING = 20
 LOGIN_FORM_WIDTH_RATIO = 0.65  # 50% della larghezza della viewport
+
+utenti_disponibili = []  # Lista di utenti disponibili
+chat_attive = {}  # username -> cronologia chat
+username_client_chat_corrente = ""  # Username del contatto attualmente selezionato
+
+
+def get_chat_download_folder(username):
+    """Restituisce la cartella dedicata per i download di una specifica chat"""
+    global download_folders
+
+    # Se esiste già la cartella per questo utente, restituiscila
+    if username in download_folders:
+        folder = download_folders[username]
+        # Verifica che la cartella esista ancora
+        if os.path.exists(folder):
+            return folder
+
+    # Altrimenti, crea una nuova cartella nella directory principale di download
+    base_download_folder = '/Users/simo/Documents/GitHub/Senza nome/SocketChat/client_chats_file_directory'
+    if not base_download_folder:
+        base_download_folder = os.path.expanduser("~/Downloads")
+
+    # Crea una cartella con nome sanitizzato dell'utente
+    safe_username = "".join(c for c in username if c.isalnum() or c in [' ', '_', '-']).strip()
+    chat_folder = os.path.join(base_download_folder, f"Chat_{safe_username}")
+
+    # Crea la directory se non esiste
+    if not os.path.exists(chat_folder):
+        os.makedirs(chat_folder)
+
+    # Memorizza la cartella per uso futuro
+    download_folders[username] = chat_folder
+
+    return chat_folder
 
 
 def setup_connection_server_FTP():
@@ -80,7 +116,7 @@ def setup_connection_server_FTP():
         return False
 
 
-def register():
+def registrati():
     username = dpg.get_value("username")
     password = dpg.get_value("password")
 
@@ -126,6 +162,7 @@ def login():
         response = client_socket.recv(1024).decode("utf-8")
 
         if response != "Autenticazione riuscita":
+            print("risposta non attesa")
             dpg.set_value("logerr", response)
             client_socket.close()
             return
@@ -146,7 +183,8 @@ def login():
 
         # Mostra la scheda di chat e abilita visivamente
         dpg.configure_item("chat", show=True)
-        dpg.set_value("tabbar", "chat")  # Cambia tab
+        dpg.configure_item("chat_private", show=True)
+        dpg.set_value("tab_bar", "chat")  # Cambia tab
         dpg.configure_item("login", show=False)  # Nascondi login tab
 
         # Pulisci messaggio di errore
@@ -163,8 +201,17 @@ def login():
             client_socket.close()
 
 
+def notifica_messaggio_privato():
+    pass
+
+
+def notifica_messaggio():
+    pass
+
+
 def listen_to_server():
-    global client_socket, chatlog, ftp_server
+    global client_socket, chatlog, ftp_server, utenti_disponibili, chat_attive, username_client_chat_corrente
+
     while True:
         try:
             msg = client_socket.recv(BUFFER_SIZE).decode("utf-8")
@@ -173,7 +220,90 @@ def listen_to_server():
 
             print(f"Messaggio ricevuto: {msg}")  # Debug
 
-            if msg == "sending_file":
+            # Gestione JSON per la lista utenti
+            if msg.startswith("{"):
+                try:
+                    data = json.loads(msg)
+                    if data.get("type") == "users_list":
+                        utenti_disponibili = data.get("users", [])
+                        print(f"Lista utenti aggiornata: {utenti_disponibili}")
+                        continue  # Salta il resto del processing
+                except Exception as e:
+                    print(f"Errore nel parsing JSON: {e}")
+                    # Se non è un JSON valido, procedi come messaggio normale
+
+            # Gestione messaggi privati
+            if msg.startswith("PRIVATE:"):
+                if "sending_file:" in msg:
+                    try:
+                        # Formato: PRIVATE:sending_file:mittente:timestamp:nome_file
+                        parts = msg.split(":", 4)
+                        if len(parts) == 5:
+                            sender = parts[2]  # chi ha inviato il file
+                            timestamp = parts[3]  # quando è stato inviato
+                            filename = parts[4]  # nome del file
+
+                            print(f"Notifica di file privato: {sender} ha inviato {filename}")
+
+                            # Assicurati che ci sia una chat con il mittente
+                            if sender not in chat_attive:
+                                chat_attive[sender] = ""
+                                aggiorna_lista_contatti()
+
+                            # Aggiungi messaggio di notifica alla chat
+                            file_notification = f"\n{timestamp} - {sender} --> Ha inviato il file {filename}. Download in corso..."
+                            chat_attive[sender] += file_notification
+
+                            # Aggiorna la visualizzazione se è la chat corrente
+                            if sender == username_client_chat_corrente:
+                                dpg.set_value("chatlog_field_privata", chat_attive[sender])
+
+                            # Avvia un thread per il download in background
+                            download_thread = threading.Thread(
+                                target=download_private_file,
+                                args=(sender, filename, timestamp, file_notification),
+                                daemon=True
+                            )
+                            download_thread.start()
+
+                        # Non processare oltre questo messaggio
+                        continue
+                    except Exception as e:
+                        print(f"Errore nell'elaborazione della notifica di file privato: {e}")
+
+                else:
+                    _, private_msg = msg.split(":", 1)
+
+                    # Estrai mittente o destinatario
+                    parts = private_msg.split(" - ", 1)
+                    if len(parts) == 2:
+                        timestamp, content = parts
+
+                        if "-->" in content:  # Messaggio in arrivo da un altro utente
+                            sender, message = content.split(" -->", 1)
+                            print(f"sender: {sender} - message: {message}")
+
+                            # Aggiungi alla chat con il mittente
+                            if sender not in chat_attive:
+                                print(f"entrato in sender not in chat_attive - chat attive: {chat_attive}")
+                                chat_attive[sender] = ""
+                                # Aggiorna la lista dei contatti
+                                aggiorna_lista_contatti()
+
+                            # Aggiungi il messaggio alla chat con formato standardizzato
+                            chat_attive[sender] += f"\n{timestamp} - {sender} --> {message}"
+
+                            # Se è la chat corrente, aggiorna la visualizzazione
+                            if sender == username_client_chat_corrente:
+                                dpg.set_value("chatlog_field_privata", chat_attive[sender])
+
+                            notifica_messaggio_privato()
+
+                    # Non mostrare il messaggio privato nella chat globale
+                    continue
+
+            # Gestione file in arrivo
+            elif msg == "sending_file":
                 print("Rilevata notifica di invio file")
 
                 # Ricevi timestamp e nome utente
@@ -185,7 +315,6 @@ def listen_to_server():
                 print(f"Ricevuto nome file: {filename}")
 
                 # Crea un thread separato per il download del file
-                # Questo evita il blocco del thread principale durante il download
                 download_thread = threading.Thread(
                     target=download_file,
                     args=(time_stamp_and_user_name, filename),
@@ -193,11 +322,12 @@ def listen_to_server():
                 )
                 download_thread.start()
 
+            # Messaggi normali per la chat globale
             else:
-                # Messaggi normali
                 with chatlog_lock:
                     chatlog = chatlog + "\n" + msg
                     dpg.set_value("chatlog_field", chatlog)
+                    notifica_messaggio()
 
         except Exception as e:
             print(f"Error in listen_to_server: {e}")
@@ -206,13 +336,104 @@ def listen_to_server():
     print("Thread di ascolto terminato")
 
 
+def download_private_file(sender, filename, timestamp, notification_message):
+    """Scarica un file inviato in una chat privata"""
+    try:
+        # Ottieni cartella dedicata per questa chat
+
+        download_folder = get_chat_download_folder(sender)
+
+        print(f"filename prima dello split = {filename}")
+        parts = filename.split(":", 2)
+        filename = parts[2]
+        print(f"filename dopo lo split = {filename}")
+
+        print(f"Download di {filename} da {sender} nella cartella {download_folder}")
+
+        # Percorso completo del file
+        file_path = os.path.join(download_folder, filename)
+
+        # Effettua la connessione FTP e scarica il file
+        ftp_success = setup_connection_server_FTP()
+        if not ftp_success:
+            error_msg = f"\n{timestamp} - {sender} --> Impossibile scaricare il file {filename}: errore connessione FTP"
+            update_private_chat(sender, notification_message, error_msg)
+            return
+
+        # Tentativo di download
+        max_attempts = 5
+        download_successful = False
+
+        for attempt in range(max_attempts):
+            try:
+                # Lista i file disponibili
+                files = ftp_server.nlst()
+
+                if filename not in files:
+                    print(f"File {filename} non trovato, tentativo {attempt + 1}/{max_attempts}")
+                    time.sleep(2)
+                    continue
+
+                # Scarica il file
+
+                with open(file_path, 'wb') as local_file:
+                    ftp_server.retrbinary(f"RETR {filename}", local_file.write)
+
+                # Verifica che il file sia stato scaricato correttamente
+                if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                    download_successful = True
+                    break
+
+            except Exception as e:
+                print(f"Errore tentativo {attempt + 1}: {e}")
+                time.sleep(2)
+
+        # Aggiorna la chat in base al risultato
+        if download_successful:
+            success_msg = f"\n{timestamp} - {sender} --> Ha inviato il file {filename}. Download completato."
+            update_private_chat(sender, notification_message, success_msg)
+
+            # Apri la cartella di download
+            try:
+                system = platform.system()
+                if system == 'Windows':
+                    subprocess.Popen(f'explorer /select,"{file_path}"')
+                elif system == 'Darwin':  # macOS
+                    subprocess.Popen(['open', '-R', file_path])
+                else:  # Linux e altri sistemi
+                    subprocess.Popen(['xdg-open', os.path.dirname(file_path)])
+            except Exception as e:
+                print(f"Errore nell'apertura del file explorer: {e}")
+        else:
+            error_msg = f"\n{timestamp} - {sender} --> Impossibile scaricare il file {filename} dopo {max_attempts} tentativi"
+            update_private_chat(sender, notification_message, error_msg)
+
+    except Exception as e:
+        print(f"Errore globale durante il download del file privato: {e}")
+        error_msg = f"\n{timestamp} - {sender} --> Errore durante il download di {filename}: {str(e)}"
+        update_private_chat(sender, notification_message, error_msg)
+
+
+def update_private_chat(username, old_message, new_message):
+    """Aggiorna un messaggio nella chat privata"""
+    global chat_attive
+
+    if username in chat_attive:
+        # Sostituisci il vecchio messaggio con il nuovo
+        chat_attive[username] = chat_attive[username].replace(old_message, new_message)
+
+        # Aggiorna la visualizzazione se è la chat attiva
+        if username == username_client_chat_corrente:
+            dpg.set_value("chatlog_field_privata", chat_attive[username])
+
+
 def download_file(time_stamp_and_user_name, filename):
     """Thread separato per gestire il download di un file"""
     global ftp_server, chatlog
 
     try:
         # Controlla se esiste una cartella di download configurata
-        download_folder = dpg.get_value("download_folder")
+        download_folder = dpg.get_value("cartella_download")
         if not download_folder:
             download_folder = os.path.expanduser("~/Downloads")  # Default
             print(f"Usando cartella di download predefinita: {download_folder}")
@@ -403,12 +624,12 @@ def invia():
 
 
 def seleziona_cartella_download():
-    """Apre un dialog per selezionare la cartella di download dei file, usando AppleScript per macOS"""
+    #Apre un dialog per selezionare la cartella di download dei file, usando AppleScript per macOS
     if getattr(seleziona_cartella_download, 'in_progress', False):
         return
 
     seleziona_cartella_download.in_progress = True
-    dpg.configure_item("set_download_folder_button", enabled=False)
+    dpg.configure_item("btn_selezione_cartella_download", enabled=False)
 
     # Crea un file temporaneo per comunicare il risultato
     temp_file = tempfile.mktemp()
@@ -471,7 +692,7 @@ if folder_path:
                 folder_path = f.read().strip()
                 if folder_path:
                     # Salva il percorso
-                    dpg.set_value("download_folder", folder_path)
+                    dpg.set_value("cartella_download", folder_path)
                     print(f"Cartella di download impostata: {folder_path}")
     finally:
         # Pulisci il file temporaneo
@@ -481,7 +702,7 @@ if folder_path:
         except:
             pass
 
-        dpg.configure_item("set_download_folder_button", enabled=True)
+        dpg.configure_item("btn_selezione_cartella_download", enabled=True)
         seleziona_cartella_download.in_progress = False
 
 
@@ -498,8 +719,8 @@ def center_items():
     dpg.configure_item("login_title", color=[255, 255, 255])
 
     # Aggiorna dimensioni degli elementi di login
-    dpg.set_item_width("left_spacer", side_spacer)
-    dpg.set_item_width("right_spacer", side_spacer)
+    dpg.set_item_width("spaziatore_sinistro", side_spacer)
+    dpg.set_item_width("spaziatore_destro", side_spacer)
 
     # Ridimensiona i campi di input
     input_width = form_width - 40  # Un po' più piccolo del form per margini
@@ -544,12 +765,38 @@ def center_items():
 
     # Aggiorna l'input della cartella di download
     input_download_width = download_width - 180  # Spazio per il pulsante
-    dpg.set_item_width("download_folder", input_download_width)
-    dpg.configure_item("download_folder", height=INPUT_HEIGHT)
+    dpg.set_item_width("cartella_download", input_download_width)
+    dpg.configure_item("cartella_download", height=INPUT_HEIGHT)
 
     # Aggiorna dimensione pulsante cartella
-    dpg.set_item_width("set_download_folder_button", 160)
-    dpg.configure_item("set_download_folder_button", height=INPUT_HEIGHT)
+    dpg.set_item_width("btn_selezione_cartella_download", 160)
+    dpg.configure_item("btn_selezione_cartella_download", height=INPUT_HEIGHT)
+
+    if dpg.does_item_exist("pannello_contatti"):
+        # Imposta dimensioni per il pannello dei contatti
+        contacts_width = 250
+        dpg.set_item_width("pannello_contatti", contacts_width)
+
+        # Imposta dimensioni per il pannello di chat attiva
+        chat_panel_width = viewport_width - contacts_width - 25  # Margine
+        dpg.set_item_width("chat_attiva", chat_panel_width)
+
+        # Configura altri elementi nella chat privata
+        if dpg.does_item_exist("private_chatlog_field"):
+            dpg.set_item_width("chatlog_field_privata", chat_panel_width - 20)
+            chat_height = viewport_height - 200  # Spazio per input e header
+            dpg.set_item_height("chatlog_field_privata", chat_height)
+
+        # Input text e pulsante
+        if dpg.does_item_exist("input_txt_chat_privata"):
+            input_width = chat_panel_width - 120  # Spazio per pulsante
+            dpg.set_item_width("input_txt_chat_privata", input_width)
+            dpg.configure_item("input_txt_chat_privata", height=INPUT_HEIGHT)
+
+        # File field e pulsante
+        if dpg.does_item_exist("file_field_privata"):
+            dpg.set_item_width("file_field_privata", input_width)
+            dpg.configure_item("file_field_privata", height=INPUT_HEIGHT)
 
 
 def carica_file():
@@ -566,7 +813,7 @@ def carica_file():
     # Determina il sistema operativo
     system = platform.system()
 
-    if system == 'Darwin' or system == 'Sequoia':  # macOS o Sequoia
+    if system == 'Darwin':  # macOS
         # Usa AppleScript direttamente per un dialogo di selezione file nativo
         # che sarà sempre in primo piano
         applescript = f'''
@@ -637,11 +884,11 @@ if file_path:
 
 def create_gui():
     with dpg.window(label="Chat", tag="window"):
-        with dpg.tab_bar(tag="tabbar"):
+        with dpg.tab_bar(tag="tab_bar"):
             # Tab Login
             with dpg.tab(label="Login", tag="login"):
                 with dpg.group(horizontal=True):
-                    dpg.add_spacer(tag="left_spacer", width=300)  # Spaziatore a sinistra
+                    dpg.add_spacer(tag="spaziatore_sinistro", width=300)  # Spaziatore a sinistra
 
                     with dpg.group():  # Gruppo verticale per gli elementi di login
                         dpg.add_spacer(height=SPACING * 13)  # Spaziatore in alto
@@ -656,13 +903,13 @@ def create_gui():
                         with dpg.group(horizontal=True):
                             dpg.add_button(label="Login", tag="login_button", callback=login)
                             dpg.add_spacer(width=SPACING)
-                            dpg.add_button(label="Register", tag="register_button", callback=register)
+                            dpg.add_button(label="Register", tag="register_button", callback=registrati)
 
                         dpg.add_spacer(height=SPACING)
                         dpg.add_text("", tag="logerr", color=(255, 0, 0))  # Colore rosso per errori
                         dpg.add_spacer(height=SPACING * 2)  # Spaziatore in basso
 
-                    dpg.add_spacer(tag="right_spacer", width=300)  # Spaziatore a destra
+                    dpg.add_spacer(tag="spaziatore_destro", width=300)  # Spaziatore a destra
 
             # Tab Chat
             with dpg.tab(label="chat_globale", tag="chat", show=False):
@@ -715,7 +962,7 @@ def create_gui():
                                        callback=mostra_aggiungi_contatti, width=-1)
 
                     # finestra a destra con la chat selezionata da visualizzare
-                    with dpg.child_window(tag="Chat_attiva", width=-1, border=True):
+                    with dpg.child_window(tag="chat_attiva", width=-1, border=True):
                         # titolo/nome della chat
                         with dpg.group(horizontal=True, tag="Nome_chat"):
                             dpg.add_text("Seleziona una chat", tag="titolo_chat_attiva")
@@ -732,13 +979,245 @@ def create_gui():
                             dpg.add_button(label="Invia", tag="btn_invia_messaggio_privato",
                                            callback=invia_messaggio_privato, width=80)
 
+                        with dpg.group(horizontal=True):
+                            dpg.add_input_text(tag="file_field_privata", multiline=False, readonly=True, width=-120)
+                            dpg.add_button(label="File", tag="btn_file_chat_privata", callback=select_private_file,
+                                           width=100)
+
+
+def select_private_file():
+    #Apre un dialog per selezionare un file da inviare in chat privata
+    if not username_client_chat_corrente:
+        dpg.set_value("logerr", "Seleziona prima un contatto")
+        return
+
+    if getattr(select_private_file, 'in_progress', False):
+        return
+
+    select_private_file.in_progress = True
+    dpg.configure_item("btn_file_chat_privata", enabled=False)
+
+    # Usa la stessa logica di selezione file che hai già implementato
+    temp_file = tempfile.mktemp()
+    system = platform.system()
+
+    if system == 'Darwin':  # macOS
+        # Usa AppleScript direttamente per un dialogo di selezione file nativo
+        # che sarà sempre in primo piano
+        applescript = f'''
+            tell application "System Events"
+                activate
+            end tell
+            set selectedFile to choose file with prompt "Seleziona un file da inviare"
+            set filePath to POSIX path of selectedFile
+            do shell script "echo " & quoted form of filePath & " > {temp_file}"
+            '''
+
+        try:
+            # Esegui AppleScript
+            subprocess.run(["osascript", "-e", applescript], check=False)
+        except Exception as e:
+            print(f"Errore nell'esecuzione di AppleScript: {e}")
+    else:
+        # Per Windows e altri sistemi, usa il metodo Tkinter come prima
+        script_file = tempfile.mktemp(suffix='.py')
+        with open(script_file, 'w') as f:
+            f.write("""
+    import tkinter as tk
+    from tkinter import filedialog
+    import sys
+
+    root = tk.Tk()
+    root.attributes('-topmost', True)
+    root.withdraw()
+    file_path = filedialog.askopenfilename(
+        title="Seleziona un file da inviare",
+        filetypes=[("Tutti i file", "*"), ("File di testo", "*.txt")]
+    )
+
+    if file_path:
+        with open(sys.argv[1], 'w') as f:
+            f.write(file_path)
+    """)
+
+        # Esegui lo script in un processo separato
+        subprocess.run([sys.executable, script_file, temp_file], check=False)
+
+        # Pulisci il file dello script
+        try:
+            if os.path.exists(script_file):
+                os.remove(script_file)
+        except:
+            pass
+
+    try:
+        # Leggi il risultato
+        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+            with open(temp_file, 'r') as f:
+                file_path = f.read().strip()
+                if file_path:
+                    dpg.set_value("file_field_privata", file_path)
+                    print(f"File selezionato per chat privata: {file_path}")
+    finally:
+        # Pulisci il file temporaneo
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        except:
+            pass
+
+        dpg.configure_item("btn_file_chat_privata", enabled=True)
+        select_private_file.in_progress = False
 
 def invia_messaggio_privato():
-    pass
+    #Invia un messaggio privato o un file al contatto attuale
+    global client_socket, username_client_chat_corrente, chat_attive
+
+    if not username_client_chat_corrente:
+        dpg.set_value("logerr", "Seleziona prima un contatto")
+        return
+
+    msg = dpg.get_value("input_txt_chat_privata")
+    file_field = dpg.get_value("file_field_privata")
+
+    # Verifica se sono entrambi vuoti
+    if not msg and not file_field:
+        return
+
+    timestamp = str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    # Priorità all'invio del file
+    if file_field:
+        try:
+            # Verifica che il file esista
+            if not os.path.exists(file_field):
+                dpg.set_value("logerr", f"Errore: il file {file_field} non esiste")
+                return
+
+            # Verifica che il file non sia vuoto
+            if os.path.getsize(file_field) == 0:
+                dpg.set_value("logerr", "Errore: il file è vuoto")
+                return
+
+            # Ottieni il nome del file dal percorso
+            name_file = os.path.basename(file_field)
+
+            # Forza una riconnessione FTP
+            ftp_success = setup_connection_server_FTP()
+            if not ftp_success:
+                dpg.set_value("logerr", "Errore nella connessione FTP. Impossibile inviare il file.")
+                return
+
+            # Aggiungi messaggio alla chat (prima dell'invio)
+            message = f"\n{timestamp} - Tu -> Invio del file {name_file} in corso..."
+            chat_attive[username_client_chat_corrente] += message
+            dpg.set_value("chatlog_field_privata", chat_attive[username_client_chat_corrente])
+
+            # Invia il file tramite FTP
+            with open(file_field, 'rb') as file:
+                print(f"Invio del file {name_file} in chat privata con {username_client_chat_corrente}...")
+                ftp_server.storbinary(f"STOR {name_file}", file)
+                print(f"File {name_file} inviato con successo")
+
+            # Dopo il caricamento FTP, notifica il server
+            # Formato: PRIVATE:sending_file:destinatario:timestamp:nome_file
+            file_notification = f"PRIVATE:sending_file:{username_client_chat_corrente}:{timestamp}:{name_file}"
+            client_socket.send(file_notification.encode('utf-8'))
+
+            # Aggiorna il messaggio nella chat
+            sent_message = f"\n{timestamp} - Tu -> File {name_file} inviato con successo"
+            chat_attive[username_client_chat_corrente] = chat_attive[username_client_chat_corrente].replace(message,sent_message)
+            dpg.set_value("chatlog_field_privata", chat_attive[username_client_chat_corrente])
+
+            # Pulisci il campo file dopo l'invio
+            dpg.set_value("file_field_privata", "")
+
+        except Exception as e:
+            error_msg = f"Errore nell'invio del file: {e}"
+            dpg.set_value("logerr", error_msg)
+
+            # Aggiorna il log con l'errore
+            error_message = f"\n{timestamp} - Tu -> Errore nell'invio del file {os.path.basename(file_field)}"
+            chat_attive[username_client_chat_corrente] += error_message
+            dpg.set_value("chatlog_field_privata", chat_attive[username_client_chat_corrente])
+
+    elif msg:  # Solo se c'è un messaggio e non un file
+        try:
+            # Invia il messaggio privato - MODIFICATO IL FORMATO
+            client_socket.send(f"PRIVATE:{username_client_chat_corrente}:{msg}".encode("utf-8"))
+
+            # Aggiungi il messaggio alla chat locale con formato standardizzato
+            formatted_msg = f"\n{timestamp} - Tu --> {msg}"
+            chat_attive[username_client_chat_corrente] += formatted_msg
+            dpg.set_value("chatlog_field_privata", chat_attive[username_client_chat_corrente])
+
+            # Pulisci il campo di input
+            dpg.set_value("input_txt_chat_privata", "")
+
+        except Exception as e:
+            error_msg = f"Errore durante l'invio del messaggio: {str(e)}"
+            dpg.set_value("logerr", error_msg)
 
 
-def start_chat_with(utente):
-    pass
+def apri_chat_con(utente):
+    global username_client_chat_corrente
+    print(f"Aprendo chat con {utente}")
+
+    # Imposta l'utente corrente
+    username_client_chat_corrente = utente
+
+    # Assicurati che esista una cartella per i download di questa chat
+    download_folder = get_chat_download_folder(utente)
+    print(f"Cartella download per chat con {utente}: {download_folder}")
+
+    # Aggiorna l'intestazione della chat
+    dpg.set_value("titolo_chat_attiva", f"Chat con {username_client_chat_corrente}")
+
+    # Mostra la cronologia dei messaggi
+    if utente in chat_attive:
+        dpg.set_value("chatlog_field_privata", chat_attive[utente])
+    else:
+        dpg.set_value("chatlog_field_privata", "")
+        chat_attive[utente] = ""
+
+
+def aggiorna_lista_contatti():
+    #Aggiorna la lista dei contatti nella finestra laterale
+
+    # Pulisci la lista precedente
+
+    if dpg.does_item_exist("lista_contatti"):
+        dpg.delete_item("lista_contatti", children_only=True)
+
+        # Aggiungi i contatti con cui abbiamo una chat attiva
+        for username in chat_attive.keys():
+            dpg.add_button(
+                label=username,
+                tag=f"contact_{username}",
+                callback=apri_chat_con(username), #funzione lambda senza nome
+                width=-1,
+                parent="lista_contatti"
+            )
+
+
+def inizia_chat_con(utente):
+    #Inizia una nuova chat con un utente
+    if utente not in chat_attive:
+        chat_attive[utente] = ""
+        aggiorna_lista_contatti()
+        private_chat_download_directory = f"/Users/simo/Documents/GitHub/Senza nome/SocketChat/client_chats_file_directory/{utente}"
+        if not os.path.exists(private_chat_download_directory):
+            os.makedirs(private_chat_download_directory)
+            print(f"Creata cartella di download: {private_chat_download_directory}")
+
+    print(f"funzione inizia chat con {utente}")
+
+    # Apre la chat con l'utente scelto
+    apri_chat_con(utente)
+
+    # Chiude la finestra dell'aggiungi contatti
+    if dpg.does_item_exist("finestra_aggiungi_contatto"):
+        dpg.delete_item("finestra_aggiungi_contatto")
 
 
 def mostra_aggiungi_contatti():
@@ -754,11 +1233,13 @@ def mostra_aggiungi_contatti():
 
         with dpg.child_window(tag="lista_utenti_disponibili", height=300, width=-1):
             for user in utenti_disponibili:
-                if user != nome_utente_personale:  # Non mostrare l'utente corrente
-                    dpg.add_button(label=user, tag=f"add_user_{user}",
-                                   callback=lambda s, a, u=user: start_chat_with(u), width=-1) #lambda è una funzione senza nome: s è
+                print(user)
+                #if user != nome_utente_personale:  Non mostrare l'utente corrente
+                dpg.add_button(label=user, tag=f"add_user_{user}",
+                                   callback=lambda:inizia_chat_con(user), width=-1) #lambda è una funzione senza nome. Se non facessi così non potrei passare nulla come argomento o mi eseguirebbe subito la funzione con le parentesi
 
-        dpg.add_button(label="Chiudi", callback=lambda: dpg.delete_item("finestra_aggiungi_contatto"), width=-1)
+        dpg.add_button(label="Chiudi", callback=lambda:dpg.delete_item("finestra_aggiungi_contatto"), width=-1)
+
 
 # Creazione dell'interfaccia
 create_gui()
