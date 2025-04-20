@@ -15,9 +15,29 @@ import platform
 import subprocess
 import time
 
+
+#import per le chiamate e le videochiamate
+import pyaudio # con questo modulo gestisco l'audio in input e in output
+import numpy as np
+import struct
+import pickle
+import cv2 # con questo modulo gestisco la videocamera e i frame ricevuti dall'altro client
+
+
 import dearpygui.dearpygui as dpg
 from tkfilebrowser import askopendirname, askopenfilename
 from dearpygui.dearpygui import configure_item
+
+
+# Costanti per le chiamate e le videochiamate
+CHUNK = 1024
+FORMAT = pyaudio.paInt16
+CHANNEL = 1
+RATE = 44100 # valore che consiglia la documentazione
+PORT_VIDEOCHIAMATE = 12347
+PORT_CHIAMATE = 12348
+
+# Altre costanti
 
 SERVER_IP = '127.0.0.1'
 DEFAULT_PORT = 12345
@@ -25,6 +45,18 @@ BUFFER_SIZE = 1024
 
 dpg.create_context()
 dpg.create_viewport(title='Socket Chat', width=950, height=800)
+
+# variabili globali per le chiamate e le videochiamate
+
+chiamata_in_corso = False
+socket_chiamata = None
+is_video = False
+audioStream = None
+VideoCapture = None
+p = None # istanza di pyaudio
+utente_in_chiamata = ""
+
+# altre variabili globali
 
 chatlog_lock = threading.Lock()
 chatlog = ""
@@ -65,7 +97,7 @@ def get_chat_download_folder(username):
     if not base_download_folder:
         base_download_folder = os.path.expanduser("~/Downloads")
 
-    # Crea una cartella con nome sanitizzato dell'utente
+    # Crea una cartella con nome dell'utente
     safe_username = "".join(c for c in username if c.isalnum() or c in [' ', '_', '-']).strip()
     chat_folder = os.path.join(base_download_folder, f"Chat_{safe_username}")
 
@@ -160,8 +192,9 @@ def login():
 
         # Ricevi risposta
         response = client_socket.recv(1024).decode("utf-8")
+        splittedResponde = response.split(':', 1)
 
-        if response != "Autenticazione riuscita":
+        if splittedResponde[0] != "Autenticazione riuscita":
             print("risposta non attesa")
             dpg.set_value("logerr", response)
             client_socket.close()
@@ -291,7 +324,7 @@ def listen_to_server():
                                 aggiorna_lista_contatti()
 
                             # Aggiungi il messaggio alla chat con formato standardizzato
-                            chat_attive[sender] += f"\n{timestamp} - {sender} --> {message}"
+                            chat_attive[sender] += f"\n{timestamp} - {sender} -->{message}"
 
                             # Se è la chat corrente, aggiorna la visualizzazione
                             if sender == username_client_chat_corrente:
@@ -966,6 +999,9 @@ def create_gui():
                         # titolo/nome della chat
                         with dpg.group(horizontal=True, tag="Nome_chat"):
                             dpg.add_text("Seleziona una chat", tag="titolo_chat_attiva")
+                            dpg.add_spacer(width=348)
+                            dpg.add_button(label="Chiama", tag="btn_chiama_privato", callback=chiama_privato, width=70)
+                            dpg.add_button(label="Videochiama", tag="btn_videochiama_privato", callback=videochiama_privato, width=90)
 
                         dpg.add_separator()
 
@@ -984,6 +1020,12 @@ def create_gui():
                             dpg.add_button(label="File", tag="btn_file_chat_privata", callback=select_private_file,
                                            width=100)
 
+
+def chiama_privato():
+    pass
+
+def videochiama_privato():
+    pass
 
 def select_private_file():
     #Apre un dialog per selezionare un file da inviare in chat privata

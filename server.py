@@ -147,6 +147,7 @@ def handle_client_connection(client, address):
         elif data.startswith("LOGIN:"):
             _, username, password = data.split(":", 2)
             success, message = authenticate_user(username, password)
+            print(f"message di login: {message}")
             client.send(message.encode('utf-8'))
             print(f"Login: {username} - {message}")  # Debug
             if not success:
@@ -156,6 +157,8 @@ def handle_client_connection(client, address):
             client.send("Comando non valido".encode('utf-8'))
             client.close()
             return
+
+        time.sleep(0.5)
 
         # Se arriviamo qui, l'utente è autenticato
         with lock:
