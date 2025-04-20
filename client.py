@@ -34,8 +34,7 @@ CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNEL = 1
 RATE = 44100 # valore che consiglia la documentazione
-PORT_VIDEOCHIAMATE = 12347
-PORT_CHIAMATE = 12348
+PORT_CHIAMATE = 12347
 
 # Altre costanti
 
@@ -1022,9 +1021,54 @@ def create_gui():
 
 
 def chiama_privato():
-    pass
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+    try:
+        dpg.configure_item("btn_chiama_privato", enabled=False)
+        dpg.configure_item("btn_videochiama_privato", enabled=False)
+        utente_da_chiamare = username_client_chat_corrente
+        client_socket.send(f"CALLREQUEST:{utente_da_chiamare}".encode('utf-8'))
+        ip_utente_da_chiamare = client_socket.recv(BUFFER_SIZE).decode('utf-8')
+        socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket_chiamata.connect((ip_utente_da_chiamare, PORT_CHIAMATE))
+        socket_chiamata.send(f"CALLREQUEST:{dpg.get_value("username")}:{is_video}".encode('utf-8'))  # is_video è False siccome stiamo chiamando normalmente, sennò True
+        response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
+        if response is "CALLREQUEST:ACCEPTED":
+            chiamata_in_corso = True
+            p = pyaudio.PyAudio()
+            audioStream = p.open(
+                format=FORMAT,
+                rate=RATE,
+                channels=CHANNEL,
+                input=True,
+                output=True,
+                frames_per_buffer=CHUNK
+            )
+
+            audio_thread = threading.Thread(target=gestisci_audio)
+            audio_thread.start()
+            mostra_finestra_chiamata()
+    except Exception as e:
+        print(f"Errore nell'inizializzazione della chiamata: {e}")
+        termina_chiamata()
+
 
 def videochiama_privato():
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+    pass
+
+def mostra_finestra_chiamata():
+    global utente_in_chiamata
+    dpg.window()
+
+def gestisci_audio():
+    global chiamata_in_corso, socket_chiamata, audioStream
+    try:
+
+    except Exception as e:
+        print(f"Errore nella gestione dell'audio: {e}")
+
+def termina_chiamata():
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
     pass
 
 def select_private_file():
