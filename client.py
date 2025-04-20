@@ -1081,7 +1081,34 @@ def gestisci_audio():
 
 def termina_chiamata():
     global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
-    pass
+    try:
+        if socket_chiamata and chiamata_in_corso:
+            socket_chiamata.send("ENDCALL".encode('utf-8'))
+
+        chiamata_in_corso = False
+        is_video = False
+        utente_in_chiamata = ""
+
+        if socket_chiamata:
+            socket_chiamata.close()
+
+        if p:
+            p.terminate()
+
+        if audioStream:
+            audioStream.stop_stream()
+            audioStream.close()
+
+        if VideoCapture:
+            VideoCapture.release()
+
+        if dpg.does_item_exist("finestra_chiamata"):
+            dpg.delete_item("finestra_chiamata")
+
+        print("Chiamata terminata")
+
+    except Exception as e:
+        print(f"Errore nella terminazione della chiamata: {e}")
 
 def select_private_file():
     #Apre un dialog per selezionare un file da inviare in chat privata
