@@ -1063,7 +1063,19 @@ def mostra_finestra_chiamata():
 def gestisci_audio():
     global chiamata_in_corso, socket_chiamata, audioStream
     try:
+        while chiamata_in_corso and socket_chiamata:
+            #invio audio
+            audio_data = audioStream.read(CHUNK, exception_on_overlfow=False)
+            socket_chiamata.send(audio_data)
 
+            #ricevo audio
+            try:
+                socket_chiamata.settimeout(0.1) #diamo un minimo di tempo al destinatario di inviare l'audio
+                audio_ricevuto = socket_chiamata.recv(CHUNK * 4) # inserisco il buffer che consiglia la documentazione
+                if audio_ricevuto:
+                    audioStream.write(audio_ricevuto)
+            except socket_chiamata.timeout:
+                pass # vuol dire che non abbiamo ricevuto nessun audio quindi semplicemente continua
     except Exception as e:
         print(f"Errore nella gestione dell'audio: {e}")
 
