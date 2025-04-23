@@ -14,7 +14,7 @@ clients = []
 active_users = {}  # username -> socket
 lock = threading.Lock()
 USERS_FILE = "users.json"
-SERVER_IP = '127.0.0.1'
+SERVER_IP = '0.0.0.0'
 PORT = 12345
 MAX_CONNECTIONS = 10
 authorizer = None
@@ -211,6 +211,16 @@ def handle_client_connection(client, address):
                     except Exception as e:
                         print(f"Errore durante la gestione dell'invio file: {e}")
                     continue
+
+                if message.startswith("PRIVATE:CALLREQUEST"):
+                    parts = message.split(":", 2)
+                    nome_utente_richiesto = parts[2]
+                    if nome_utente_richiesto in active_users:
+                        recipient_socket = active_users[nome_utente_richiesto]
+                        recipient_ip = recipient_socket.getpeername()[0]
+                        client.send(recipient_ip.encode('utf-8'))
+                    else:
+                        client.send("Nessun client con quel nome disponibile".encode('utf-8'))
 
                 if message.startswith("PRIVATE:"):
                     if "sending_file:" in message:

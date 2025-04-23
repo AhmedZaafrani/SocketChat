@@ -35,10 +35,11 @@ FORMAT = pyaudio.paInt16
 CHANNEL = 1
 RATE = 44100 # valore che consiglia la documentazione
 PORT_CHIAMATE = 12347
+PORT_ATTESA_CHIAMATE = 12348
 
 # Altre costanti
 
-SERVER_IP = '127.0.0.1'
+SERVER_IP = '127.0.0.1' #ip server a cui collegarsi
 DEFAULT_PORT = 12345
 BUFFER_SIZE = 1024
 
@@ -50,6 +51,8 @@ dpg.create_viewport(title='Socket Chat', width=950, height=800)
 chiamata_in_corso = False
 socket_chiamata = None
 is_video = False
+is_audio_on = True
+is_video_on = True
 audioStream = None
 VideoCapture = None
 p = None # istanza di pyaudio
@@ -191,9 +194,9 @@ def login():
 
         # Ricevi risposta
         response = client_socket.recv(1024).decode("utf-8")
-        splittedResponde = response.split(':', 1)
+        splittedResponse = response.split(':', 1)
 
-        if splittedResponde[0] != "Autenticazione riuscita":
+        if splittedResponse[0] != "Autenticazione riuscita":
             print("risposta non attesa")
             dpg.set_value("logerr", response)
             client_socket.close()
@@ -212,6 +215,15 @@ def login():
         listen_thread = threading.Thread(target=listen_to_server)
         listen_thread.daemon = True
         listen_thread.start()
+
+        socket_attesa_chiamate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket_attesa_chiamate.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        socket_attesa_chiamate.bind(("0.0.0.0", PORT_ATTESA_CHIAMATE))
+        socket_attesa_chiamate.listen(1)
+
+        call_requests_thread = threading.Thread(target=listen_for_call_request, args=(socket_attesa_chiamate,))
+        call_requests_thread.daemon = True
+        call_requests_thread.start()
 
         # Mostra la scheda di chat e abilita visivamente
         dpg.configure_item("chat", show=True)
@@ -233,7 +245,89 @@ def login():
             client_socket.close()
 
 
-def notifica_messaggio_privato():
+def accetta_chiamata(chiChiama, is_videochiamata, client):
+    global socket_chiamata, chiamata_in_corso
+    client.send("CALLREQUEST:ACCEPT".encode('utf-8'))
+    socket_chiamata = client
+    chiamata_in_corso = True
+    mostra_finestra_chiamata("ACCEPTED")
+    if is_videochiamata:
+        videochiama_privato(False)
+    else:
+        chiama_privato(False)
+
+
+def rifiuta_chiamata(chiChiama, client):
+    client.send("CALLREQUEST:REFUSE".encode('utf-8'))
+
+
+def notifica_chiamata(chiChiama, client):
+    global is_video
+    if dpg.does_item_exist("finestra_richiesta_chiamata"):
+        dpg.delete_item("finestra_richiesta_chiamata")
+
+    # Determina il tipo di chiamata per mostrarlo nella notifica
+    if is_video:
+        call_tyoe = "Videochiamata"
+    else:
+        call_type = "Chiamata audio"
+
+    # Calcola la posizione della finestra per centrarla
+    viewport_width = dpg.get_viewport_width()
+    viewport_height = dpg.get_viewport_height()
+    window_width = 350
+    window_height = 180
+
+    # Crea la finestra di notifica
+    with dpg.window(label=f"{call_type} in arrivo", tag="finestra_richiesta_chiamata",
+                    modal=True, no_collapse=True, no_resize=True,
+                    width=window_width, height=window_height,
+                    pos=[viewport_width // 2 - window_width // 2, viewport_height // 2 - window_height // 2]):
+        # Aggiunge il messaggio della chiamata
+        dpg.add_spacer(height=10)
+        dpg.add_text(f"{chiChiama} ti sta chiamando", color=[255, 255, 255])
+        dpg.add_text(f"Tipo: {call_type}", color=[200, 200, 200])
+        dpg.add_separator()
+        dpg.add_spacer(height=15)
+
+        # Aggiungi pulsanti in riga orizzontale per accettare o rifiutare
+        with dpg.group(horizontal=True):
+            # Pulsante Accetta
+            with dpg.theme() as accept_theme:
+                with dpg.theme_component(dpg.mvButton):
+                    dpg.add_theme_color(dpg.mvThemeCol_Button, [46, 120, 50])  # Verde normale
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [66, 150, 70])  # Verde hover
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [36, 100, 40])  # Verde cliccato
+                    dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+
+            dpg.add_button(label="Accetta", tag="btn_accetta_chiamata", width=150,
+                           callback=lambda: accetta_chiamata(chiChiama, is_video, client))
+            dpg.bind_item_theme(dpg.last_item(), accept_theme)
+
+            dpg.add_spacer(width=10)
+
+            # Pulsante Rifiuta
+            with dpg.theme() as reject_theme:
+                with dpg.theme_component(dpg.mvButton):
+                    dpg.add_theme_color(dpg.mvThemeCol_Button, [150, 40, 40])  # Rosso normale
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [180, 60, 60])  # Rosso hover
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [120, 30, 30])  # Rosso cliccato
+                    dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+
+            dpg.add_button(label="Rifiuta", tag="btn_rifiuta_chiamata", width=150,
+                           callback=lambda: rifiuta_chiamata(chiChiama, client))
+            dpg.bind_item_theme(dpg.last_item(), reject_theme)
+
+
+def listen_for_call_request(socket_attesa_chiamate):
+    client, address = socket_attesa_chiamate.accept()
+    request_keys = client.recv(BUFFER_SIZE).decode('utf-8').strip(':')
+    if request_keys < 3:
+        if request_keys[0] == "CALLREQUEST":
+            notifica_chiamata(request_keys[1], request_keys[2], client) # notifico su dearpygui la chiamata e se
+
+
+def notifica_messaggio_privato(daChi):
     pass
 
 
@@ -998,7 +1092,7 @@ def create_gui():
                         # titolo/nome della chat
                         with dpg.group(horizontal=True, tag="Nome_chat"):
                             dpg.add_text("Seleziona una chat", tag="titolo_chat_attiva")
-                            dpg.add_spacer(width=348)
+                            dpg.add_spacer(width=355)
                             dpg.add_button(label="Chiama", tag="btn_chiama_privato", callback=chiama_privato, width=70)
                             dpg.add_button(label="Videochiama", tag="btn_videochiama_privato", callback=videochiama_privato, width=90)
 
@@ -1020,19 +1114,86 @@ def create_gui():
                                            width=100)
 
 
-def chiama_privato():
+def chiama_privato(is_you_calling):
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+
+    try:
+        if is_you_calling:
+            dpg.configure_item("btn_chiama_privato", enabled=False)
+            dpg.configure_item("btn_videochiama_privato", enabled=False)
+            utente_da_chiamare = username_client_chat_corrente
+            client_socket.send(f"PRIVATE:CALLREQUEST:{utente_da_chiamare}".encode('utf-8'))
+            risposta = client_socket.recv(BUFFER_SIZE).decode('utf-8')
+            if risposta != "Nessun client con quel nome disponibile":
+                ip_utente_da_chiamare = risposta
+                socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                socket_chiamata.connect((ip_utente_da_chiamare, PORT_CHIAMATE))
+                socket_chiamata.send(f"CALLREQUEST:{nome_utente_personale}:{is_video}".encode('utf-8'))  # is_video è False siccome stiamo chiamando normalmente, sennò True
+                response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
+                if response == "CALLREQUEST:ACCEPT":
+                    chiamata_in_corso = True
+                    p = pyaudio.PyAudio()
+                    audioStream = p.open(
+                        format=FORMAT,
+                        rate=RATE,
+                        channels=CHANNEL,
+                        input=True,
+                        output=True,
+                        frames_per_buffer=CHUNK
+                    )
+
+                    audio_thread = threading.Thread(target=gestisci_audio)
+                    audio_thread.start()
+                    mostra_finestra_chiamata("ACCEPTED")
+                else:
+                    mostra_finestra_chiamata("REFUSED")
+            else:
+                mostra_finestra_chiamata("USER NOT FOUND")
+    except Exception as e:
+        print(f"Errore nell'inizializzazione della chiamata: {e}")
+        termina_chiamata()
+
+
+def videochiama_privato(is_you_calling): # se sei tu a chiamare allora t aspetti una risposta
     global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
     try:
-        dpg.configure_item("btn_chiama_privato", enabled=False)
-        dpg.configure_item("btn_videochiama_privato", enabled=False)
-        utente_da_chiamare = username_client_chat_corrente
-        client_socket.send(f"CALLREQUEST:{utente_da_chiamare}".encode('utf-8'))
-        ip_utente_da_chiamare = client_socket.recv(BUFFER_SIZE).decode('utf-8')
-        socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket_chiamata.connect((ip_utente_da_chiamare, PORT_CHIAMATE))
-        socket_chiamata.send(f"CALLREQUEST:{dpg.get_value("username")}:{is_video}".encode('utf-8'))  # is_video è False siccome stiamo chiamando normalmente, sennò True
-        response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
-        if response is "CALLREQUEST:ACCEPTED":
+        if is_you_calling:
+            is_video = True
+            dpg.configure_item("btn_chiama_privato", enabled=False)
+            dpg.configure_item("btn_videochiama_privato", enabled=False)
+            utente_da_chiamare = username_client_chat_corrente
+            client_socket.send(f"PRIVATE:CALLREQUEST:{utente_da_chiamare}".encode('utf-8'))
+            risposta = client_socket.recv(BUFFER_SIZE).decode('utf-8')
+            if risposta != "Nessun client con quel nome disponibile":
+                ip_utente_da_chiamare = risposta
+                socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                socket_chiamata.connect((ip_utente_da_chiamare, PORT_CHIAMATE))
+                socket_chiamata.send(f"CALLREQUEST:{nome_utente_personale}:{is_video}".encode(
+                    'utf-8'))  # is_video è True siccome stiamo videochiamando, sennò False
+                response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
+                if response == "CALLREQUEST:ACCEPT":
+                    chiamata_in_corso = True
+                    p = pyaudio.PyAudio()
+                    audioStream = p.open(
+                        format=FORMAT,
+                        rate=RATE,
+                        channels=CHANNEL,
+                        input=True,
+                        output=True,
+                        frames_per_buffer=CHUNK
+                    )
+
+                    VideoCapture = cv2.VideoCapture()
+
+                    audio_thread = threading.Thread(target=gestisci_audio)
+                    audio_thread.start()
+                    mostra_finestra_chiamata("ACCEPTED")
+                elif risposta == "CALLREQUEST:REFUSE":
+                    mostra_finestra_chiamata("REFUSED")
+                else:
+                    mostra_finestra_chiamata("USER NOT FOUND")
+
+        else:
             chiamata_in_corso = True
             p = pyaudio.PyAudio()
             audioStream = p.open(
@@ -1044,29 +1205,189 @@ def chiama_privato():
                 frames_per_buffer=CHUNK
             )
 
+            VideoCapture = cv2.VideoCapture()
+
             audio_thread = threading.Thread(target=gestisci_audio)
             audio_thread.start()
-            mostra_finestra_chiamata()
+            video_thread = threading.Thread(target=gestisci_video)
+            video_thread.start()
+            mostra_finestra_chiamata("ACCEPTED")
+
     except Exception as e:
-        print(f"Errore nell'inizializzazione della chiamata: {e}")
-        termina_chiamata()
+        print(f"Errore nell'inizializzazione della videochiamata: {e}")
+        pass
 
-
-def videochiama_privato():
-    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
-    pass
-
-def mostra_finestra_chiamata():
+def mostra_finestra_chiamata(risposta):
     global utente_in_chiamata
-    dpg.window()
+    with dpg.window(label=f"Chiamo {utente_in_chiamata}", tag="finestra_chiamata", modal=True, width=400, height=500):
+        # Crea le texture per i video
+        with dpg.texture_registry(tag="registro_chiamata"):
+            # Texture per il video del mittente (tu)
+            dpg.add_raw_texture(
+                width=320, height=240,
+                default_value=np.zeros(320 * 240 * 3, dtype=np.float32),  # Texture nera iniziale
+                format=dpg.mvFormat_Float_rgb,
+                tag="texture_mittente"
+            )
+
+            # Texture per il video del destinatario
+            dpg.add_raw_texture(
+                width=320, height=240,
+                default_value=np.zeros(320 * 240 * 3, dtype=np.float32),  # Texture nera iniziale
+                format=dpg.mvFormat_Float_rgb,
+                tag="texture_destinatario"
+            )
+
+        if is_video:
+            # Collega le immagini alle texture
+            dpg.add_image(texture_tag="texture_mittente", tag="video_mittente", width=320, height=240)
+            dpg.add_separator()
+            dpg.add_image(texture_tag="texture_destinatario", tag="video_destinatario", width=320, height=240)
+
+        with dpg.group(horizontal=True):
+            with dpg.theme() as termina_theme:
+                with dpg.theme_component(dpg.mvButton):
+                    dpg.add_theme_color(dpg.mvThemeCol_Button, [150, 40, 40])  # Rosso normale
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [180, 60, 60])  # Rosso hover
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [120, 30, 30])  # Rosso cliccato
+                    dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+
+            dpg.add_button(label="Termina", tag="btn_termina_chiamata", width=150,
+                           callback=termina_chiamata)
+            dpg.bind_item_theme(dpg.last_item(), termina_theme)
+
+            # Pulsante Video (blu)
+            if is_video:
+                with dpg.theme() as video_theme:
+                    with dpg.theme_component(dpg.mvButton):
+                        dpg.add_theme_color(dpg.mvThemeCol_Button, [40, 80, 150])  # Blu normale
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [60, 100, 180])  # Blu hover
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [30, 60, 120])  # Blu cliccato
+                        dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+
+                video_label = "Disattiva Video" if is_video else "Attiva Video"
+                dpg.add_button(label=video_label, tag="btn_video", width=150, callback=attiva_disattiva_video)
+                dpg.bind_item_theme(dpg.last_item(), video_theme)
+
+            # Pulsante Audio (verde)
+            with dpg.theme() as audio_theme:
+                with dpg.theme_component(dpg.mvButton):
+                    dpg.add_theme_color(dpg.mvThemeCol_Button, [46, 120, 50])  # Verde normale
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [66, 150, 70])  # Verde hover
+                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [36, 100, 40])  # Verde cliccato
+                    dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+
+            audio_label = "Disattiva Audio" if is_audio_on else "Attiva Audio"
+            dpg.add_button(label=audio_label, tag="btn_audio", width=150,
+                           callback=attiva_disattiva_audio)
+            dpg.bind_item_theme(dpg.last_item(), audio_theme)
+
+    if risposta == "ACCEPTED":
+        dpg.set_value("finestra_chiamata", f"Chiamata con {utente_in_chiamata}") # creare la finestra dove il destinatario accetta
+    elif risposta == "REFUSED":
+        dpg.set_value("finestra_chiamata", f"Chiamata rifiutata da {utente_in_chiamata}") # creare la finestra dove il destinatario rifiuta
+        time.sleep(3)
+        dpg.delete_item("finestra_chiamata")
+    else:
+        dpg.set_value("finestra_chiamata", f"{utente_in_chiamata} non trovato!")  # creare la finestra dove il destinatario non si trova
+        time.sleep(3)
+        dpg.delete_item("finestra_chiamata")
+
+def attiva_disattiva_video():
+    global is_video_on
+    if is_video_on:
+        is_video_on = False
+    else:
+        is_video_on = True
+
+def attiva_disattiva_audio():
+    global is_audio_on
+    if is_audio_on:
+        is_audio_on = False
+    else:
+        is_audio_on = True
+
+
+def aggiorna_video_remoto(frame_remoto):
+    if not dpg.does_item_exist("texture_destinatario") or frame_remoto is None:
+        return
+
+    # Converti e formatta il frame
+    frame_rgb = cv2.cvtColor(frame_remoto, cv2.COLOR_BGR2RGB)
+    frame_resized = cv2.resize(frame_rgb, (320, 240))
+    frame_float = frame_resized.astype(np.float32) / 255.0  # Normalizza a [0,1]
+
+    # Aggiorna la texture
+    dpg.set_value("texture_destinatario", frame_float.ravel())
+
+def aggiorna_video_locale(frame):
+    if not dpg.does_item_exist("texture_mittente") or frame is None:
+        return
+
+    # Converti e formatta il frame
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    frame_resized = cv2.resize(frame_rgb, (320, 240))
+    frame_float = frame_resized.astype(np.float32) / 255.0  # Normalizza a [0,1]
+
+    dpg.set_value("texture_mittente", frame_float.ravel())
+
+def gestisci_video():
+    global is_video, is_video_on, socket_chiamata
+    try:
+        while is_video_on and socket_chiamata:
+            # Cattura frame dalla webcam
+            ret, frame = VideoCapture.read()
+            if not ret:
+                continue
+
+            # Ridimensiona e comprimi il frame
+            frame = cv2.resize(frame, (320, 240))
+            _, encoded_frame = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
+            data = encoded_frame.tobytes()
+
+            aggiorna_video_locale(frame)
+
+            # Invia dimensione e dati del frame
+            size = len(data)
+            socket_chiamata.send(struct.pack('!I', size) + data)
+
+            # Ricevi frame video
+            try:
+                socket_chiamata.settimeout(0.1)
+                size_data = socket_chiamata.recv(4)
+                if size_data:
+                    size = struct.unpack('!I', size_data)[0]
+                    frame_data = b''
+                    while len(frame_data) < size:
+                        pacchetto = socket_chiamata.recv(min(size - len(frame_data), 4096))
+                        if not pacchetto:
+                            break
+                        frame_data += pacchetto
+
+                    if len(frame_data) == size:
+                        # Decodifica e mostra il frame
+                        frame_remoto = cv2.imdecode(np.frombuffer(frame_data, dtype=np.uint8), cv2.IMREAD_COLOR)
+                        aggiorna_video_remoto(frame_remoto)
+            except socket.timeout:
+                # Nessun dato disponibile, continua
+                pass
+            except Exception as e:
+                print(f"Errore nella ricezione video P2P: {e}")
+
+            time.sleep(0.033)  # Circa 30 FPS
+
+    except Exception as e:
+        print(f"Errore nella gestione video P2P: {e}")
+        # Non terminare la chiamata, potrebbe essere solo audio
 
 def gestisci_audio():
     global chiamata_in_corso, socket_chiamata, audioStream
     try:
         while chiamata_in_corso and socket_chiamata:
             #invio audio
-            audio_data = audioStream.read(CHUNK, exception_on_overlfow=False)
-            socket_chiamata.send(audio_data)
+            if is_audio_on:
+                audio_data = audioStream.read(CHUNK, exception_on_overlfow=False)
+                socket_chiamata.send(audio_data)
 
             #ricevo audio
             try:
