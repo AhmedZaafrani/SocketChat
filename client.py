@@ -39,7 +39,7 @@ PORT_ATTESA_CHIAMATE = 12348
 
 # Altre costanti
 
-SERVER_IP = '172.20.10.3' #ip server a cui collegarsi
+SERVER_IP = '127.0.0.1' #ip server a cui collegarsi
 DEFAULT_PORT = 12345
 BUFFER_SIZE = 1024
 
@@ -328,11 +328,49 @@ def listen_for_call_request(socket_attesa_chiamate):
 
 
 def notifica_messaggio_privato(daChi):
-    pass
+    viewport_width = dpg.get_viewport_width()
+    viewport_height = dpg.get_viewport_height()
+    window_width = 350
+    window_height = 180
+    margin = 10  # margine in pixel
+    with dpg.window(label=f"private_message", tag="notifica_messaggio_privato",
+                    modal=True, no_collapse=True, no_resize=True,
+                    width=window_width, height=window_height,
+                    pos = [viewport_width - window_width - margin, viewport_height - window_height - margin]):
+        # Aggiunge il messaggio della chiamata
+        dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[255, 255, 255])
+        dpg.add_spacer(width=5)
+        dpg.add_button(label="Apri", tag="btn_notifica_privata", width=70, callback=lambda: apri_chat_con(daChi))
+
+        t = threading.Thread(target=destroy_notifica, args=(False,))  # true se è globale
 
 
 def notifica_messaggio():
-    pass
+    viewport_width = dpg.get_viewport_width()
+    viewport_height = dpg.get_viewport_height()
+    window_width = 350
+    window_height = 180
+    margin = 10  # margine in pixel
+    with dpg.window(label=f"messaggio_globale", tag="notifica_messaggio_globale",
+                    modal=True, no_collapse=True, no_resize=True,
+                    width=window_width, height=window_height,
+                    pos=[viewport_width - window_width - margin, viewport_height - window_height - margin]):
+        # Aggiunge il messaggio della chiamata
+        dpg.add_text(f"Hai ricevuto un messaggio globale", color=[255, 255, 255])
+        dpg.add_spacer(width=5)
+        dpg.add_button(label="Apri", tag="btn_notifica_globale", width=70, callback=apri_globale)
+
+    t = threading.Thread(target=destroy_notifica, args=(True,)) # true se è globale
+
+def apri_globale():
+    dpg.set_value("tab_bar", "chat")  # Cambia tab
+
+def destroy_notifica(is_globale):
+    time.sleep(2.5)
+    if is_globale:
+        dpg.delete_item("notifica_messaggio_globale")
+    else:
+        dpg.delete_item("notifica_messaggio_privato")
 
 
 def listen_to_server():
@@ -352,6 +390,7 @@ def listen_to_server():
                     data = json.loads(msg)
                     if data.get("type") == "users_list":
                         utenti_disponibili = data.get("users", [])
+                        utenti_disponibili.remove(nome_utente_personale)
                         print(f"Lista utenti aggiornata: {utenti_disponibili}")
                         continue  # Salta il resto del processing
                 except Exception as e:
@@ -1640,7 +1679,7 @@ def aggiorna_lista_contatti():
             dpg.add_button(
                 label=username,
                 tag=f"contact_{username}",
-                callback=apri_chat_con(username), #funzione lambda senza nome
+                callback=lambda:apri_chat_con(username), #funzione lambda senza nome
                 width=-1,
                 parent="lista_contatti"
             )
