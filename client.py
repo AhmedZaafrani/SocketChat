@@ -39,7 +39,7 @@ PORT_ATTESA_CHIAMATE = 12348
 
 # Altre costanti
 
-SERVER_IP = '127.0.0.1' #ip server a cui collegarsi
+SERVER_IP = '172.20.10.3' #ip server a cui collegarsi
 DEFAULT_PORT = 12345
 BUFFER_SIZE = 1024
 
@@ -95,7 +95,7 @@ def get_chat_download_folder(username):
             return folder
 
     # Altrimenti, crea una nuova cartella nella directory principale di download
-    base_download_folder = '/Users/simo/Documents/GitHub/Senza nome/SocketChat/client_chats_file_directory'
+    base_download_folder = 'client_chats_file_directory'
     if not base_download_folder:
         base_download_folder = os.path.expanduser("~/Downloads")
 
