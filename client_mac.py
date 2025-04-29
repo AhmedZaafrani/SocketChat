@@ -1918,11 +1918,13 @@ def aggiorna_video_remoto(frame_remoto):
         # Converti e formatta il frame
         frame_rgb = cv2.cvtColor(frame_remoto, cv2.COLOR_BGR2RGB)
 
-        # Ridimensiona con dimensioni che rispettano l'allineamento per evitare problemi AGX
-        # Assicurati che width sia un multiplo di 4 per evitare problemi di padding
+        # Determina le dimensioni con allineamento corretto
+        # La chiave per i dispositivi Apple è garantire che width * 3 (per RGB) sia divisibile per 4
         width, height = 320, 240
-        width = width - (width % 4)  # Arrotonda a multiplo di 4
+        while (width * 3) % 4 != 0:
+            width -= 1  # Riduci la larghezza finché non è correttamente allineata
 
+        # Ridimensiona il frame alla dimensione corretta
         frame_resized = cv2.resize(frame_rgb, (width, height))
 
         # Usa formato float con padding corretto
@@ -1930,6 +1932,10 @@ def aggiorna_video_remoto(frame_remoto):
 
         # Gestione sicura dell'aggiornamento della texture
         try:
+            # Importante: rendi l'array contiguous in memoria
+            if not frame_float.flags['C_CONTIGUOUS']:
+                frame_float = np.ascontiguousarray(frame_float)
+
             # Aggiorna la texture
             dpg.set_value("texture_destinatario", frame_float.ravel())
         except Exception as e:
@@ -1951,11 +1957,13 @@ def aggiorna_video_locale(frame):
         # Converti e formatta il frame
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Ridimensiona con dimensioni che rispettano l'allineamento per evitare problemi AGX
-        # Assicurati che width sia un multiplo di 4 per evitare problemi di padding
+        # Determina le dimensioni con allineamento corretto
+        # La chiave per i dispositivi Apple è garantire che width * 3 (per RGB) sia divisibile per 4
         width, height = 320, 240
-        width = width - (width % 4)  # Arrotonda a multiplo di 4
+        while (width * 3) % 4 != 0:
+            width -= 1  # Riduci la larghezza finché non è correttamente allineata
 
+        # Ridimensiona il frame alla dimensione corretta
         frame_resized = cv2.resize(frame_rgb, (width, height))
 
         # Usa formato float con padding corretto
@@ -1963,6 +1971,10 @@ def aggiorna_video_locale(frame):
 
         # Gestione sicura dell'aggiornamento della texture
         try:
+            # Importante: rendi l'array contiguous in memoria
+            if not frame_float.flags['C_CONTIGUOUS']:
+                frame_float = np.ascontiguousarray(frame_float)
+
             # Aggiorna la texture
             dpg.set_value("texture_mittente", frame_float.ravel())
         except Exception as e:
@@ -1977,7 +1989,7 @@ def gestisci_video():
     Gestisce l'invio e la ricezione di video durante una videochiamata.
     Ottimizzato per prestazioni e compatibilità con GPU Apple.
     """
-    global is_video, is_video_on, socket_chiamata, VideoCapture
+    global is_video, is_video_on, socket_chiamata, VideoCapture, chiamata_in_corso
 
     if VideoCapture is None:
         print("Errore: VideoCapture non inizializzato")
@@ -1987,7 +1999,7 @@ def gestisci_video():
 
     try:
         # Ottimizzazione frequenza fotogrammi
-        fps = 20  # Un valore più basso riduce il carico di rete e CPU
+        fps = 15  # Ridotto da 20 a 15 per diminuire il carico
         frame_interval = 1.0 / fps
         last_frame_time = 0
 
@@ -2016,10 +2028,15 @@ def gestisci_video():
             # Compressione e invio del frame solo se la connessione è attiva
             try:
                 if socket_chiamata:
+                    # Determina dimensioni corrette per Apple AGX
+                    width, height = 320, 240
+                    while (width * 3) % 4 != 0:
+                        width -= 1
+
                     # Ridimensiona e comprimi il frame
-                    frame_small = cv2.resize(frame, (320, 240))
+                    frame_small = cv2.resize(frame, (width, height))
                     # Usa una qualità inferiore per ridurre la dimensione dei dati
-                    _, encoded_frame = cv2.imencode('.jpg', frame_small, [cv2.IMWRITE_JPEG_QUALITY, 35])
+                    _, encoded_frame = cv2.imencode('.jpg', frame_small, [cv2.IMWRITE_JPEG_QUALITY, 30])
                     data = encoded_frame.tobytes()
 
                     # Invia dimensione e dati del frame
