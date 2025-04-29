@@ -350,15 +350,17 @@ def notifica_messaggio_privato(daChi):
     window_width = 280
     window_height = 80
     margin = 10  # margine in pixel
-    with dpg.window(label=f"private_message", tag="notifica_messaggio_privato",
-                    modal=True, no_collapse=True, no_resize=True,
-                    width=window_width, height=window_height,
-                    pos = [viewport_width - window_width - margin, viewport_height - window_height - margin]):
-        # Aggiunge il messaggio della chiamata
-        dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[255, 255, 255])
-        with dpg.group(horizontal=True):
-            dpg.add_button(label="Apri", tag="btn_notifica_privata", width=70, callback=lambda: apri_chat_con(daChi))
-            dpg.add_button(label="Chiudi", tag="btn_destroy_privato", width=70, callback=destroy_notifica)
+    if dpg.get_value("tab_bar") == "chat":
+        if username_client_chat_corrente != daChi:
+            with dpg.window(label=f"private_message", tag="notifica_messaggio_privato",
+                            modal=True, no_collapse=True, no_resize=True,
+                            width=window_width, height=window_height,
+                            pos = [viewport_width - window_width - margin, viewport_height - window_height - margin]):
+                # Aggiunge il messaggio della chiamata
+                dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[255, 255, 255])
+                with dpg.group(horizontal=True):
+                    dpg.add_button(label="Apri", tag="btn_notifica_privata", width=70, callback=lambda: apri_chat_con(daChi))
+                    dpg.add_button(label="Chiudi", tag="btn_destroy_privato", width=70, callback=destroy_notifica)
 
 
 def notifica_messaggio():
@@ -368,18 +370,20 @@ def notifica_messaggio():
     window_width = 250
     window_height = 40
     margin = 10  # margine in pixel
-    if dpg.does_item_exist("notifica_messaggio_globale"):
-        dpg.show_item("notifica_messaggio_globale")
-    else:
-        with dpg.window(label=f"messaggio_globale", tag="notifica_messaggio_globale",
-                        modal=True, no_collapse=True, no_resize=True,
-                        width=window_width, height=window_height,
-                        pos=[viewport_width - window_width - margin, viewport_height - window_height - margin]):
-            # Aggiunge il messaggio della chiamata
-            dpg.add_text(f"Hai ricevuto un messaggio globale", color=[255, 255, 255])
-            with dpg.group(horizontal=True):
-                dpg.add_button(label="Apri", tag="btn_notifica_globale", width=70, callback=apri_globale)
-                dpg.add_button(label="Chiudi", tag="btn_destroy_globale", width=70, callback=destroy_notifica)
+
+    if dpg.get_value("tab_bar") == "chat_private":
+        if dpg.does_item_exist("notifica_messaggio_globale"):
+            dpg.show_item("notifica_messaggio_globale")
+        else:
+            with dpg.window(label=f"messaggio_globale", tag="notifica_messaggio_globale",
+                            modal=True, no_collapse=True, no_resize=True,
+                            width=window_width, height=window_height,
+                            pos=[viewport_width - window_width - margin, viewport_height - window_height - margin]):
+                # Aggiunge il messaggio della chiamata
+                dpg.add_text(f"Hai ricevuto un messaggio globale", color=[255, 255, 255])
+                with dpg.group(horizontal=True):
+                    dpg.add_button(label="Apri", tag="btn_notifica_globale", width=70, callback=apri_globale)
+                    dpg.add_button(label="Chiudi", tag="btn_destroy_globale", width=70, callback=destroy_notifica)
 
 def apri_globale():
     if dpg.get_value("tab_bar") != "chat":
