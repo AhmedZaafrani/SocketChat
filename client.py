@@ -305,8 +305,8 @@ def notifica_chiamata(chiChiama, client):
     # Calcola la posizione della finestra per centrarla
     viewport_width = dpg.get_viewport_width()
     viewport_height = dpg.get_viewport_height()
-    window_width = 280
-    window_height = 80
+    window_width = 350
+    window_height = 140
 
     # Crea la finestra di notifica
     with dpg.window(label=f"{call_type} in arrivo", tag="finestra_richiesta_chiamata",
@@ -1622,7 +1622,6 @@ def mostra_finestra_chiamata(risposta):
                 # Centra il pulsante
                 button_width = 100
                 dpg.add_spacer(width=(window_width - button_width) // 2)
-                dpg.add_same_line(spacing=0)
                 dpg.add_button(label="OK", width=button_width, callback=lambda: dpg.delete_item("finestra_chiamata"))
 
             print(f"Finestra di errore creata: {title}")
@@ -1683,7 +1682,6 @@ def mostra_finestra_chiamata(risposta):
 
             # Aggiungi i pulsanti centrati orizzontalmente
             dpg.add_spacer(width=left_margin)
-            dpg.add_same_line(spacing=0)
 
             # Pulsante Termina (rosso)
             with dpg.theme() as termina_theme:
@@ -1696,8 +1694,6 @@ def mostra_finestra_chiamata(risposta):
             dpg.add_button(label="Termina", tag="btn_termina_chiamata", width=button_width,
                            callback=termina_chiamata)
             dpg.bind_item_theme(dpg.last_item(), termina_theme)
-
-            dpg.add_same_line(spacing=spacing)
 
             # Pulsante Video (blu) - solo per videochiamate
             if is_video:
@@ -1712,7 +1708,7 @@ def mostra_finestra_chiamata(risposta):
                 dpg.add_button(label=video_label, tag="btn_video", width=button_width, callback=attiva_disattiva_video)
                 dpg.bind_item_theme(dpg.last_item(), video_theme)
 
-                dpg.add_same_line(spacing=spacing)
+                dpg.add_spacer(width=spacing)
 
             # Pulsante Audio (verde)
             with dpg.theme() as audio_theme:
