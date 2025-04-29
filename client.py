@@ -1654,6 +1654,9 @@ def apri_chat_con(utente):
     global username_client_chat_corrente
     print(f"Aprendo chat con {utente}")
 
+    if dpg.does_item_exist('notifica_messaggio_privato'):
+        dpg.delete_item('notifica_messaggio_privato')
+
     # Imposta l'utente corrente
     username_client_chat_corrente = utente
 
