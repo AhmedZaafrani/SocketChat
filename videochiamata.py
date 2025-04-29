@@ -9,6 +9,9 @@ import argparse
 import time
 import sys
 
+"""AGX: Texture read/write assertion failed: bytes_per_row >= used_bytes_per_rowAGX: Texture read/write assertion failed: bytes_per_row >= used_bytes_per_rowAGX: Texture read/write assertion failed: bytes_per_row >= used_bytes_per_row"""
+
+
 # Configurazione iniziale di DearPyGUI
 dpg.create_context()
 dpg.create_viewport(title="Applicazione Videochiamata", width=1280, height=720)
