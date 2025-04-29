@@ -268,6 +268,10 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
     try:
         print(f"Accettando chiamata da {chiChiama}, video={is_videochiamata}")
 
+        # Chiudi la finestra di richiesta PRIMA di tutto il resto
+        if dpg.does_item_exist("finestra_richiesta_chiamata"):
+            dpg.delete_item("finestra_richiesta_chiamata")
+
         # Invia l'accettazione
         client.send("CALLREQUEST:ACCEPT".encode('utf-8'))
 
@@ -309,10 +313,27 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
                 video_thread.daemon = True
                 video_thread.start()
 
-        # Mostra la finestra di chiamata
-        mostra_finestra_chiamata("ACCEPTED")
-        if dpg.does_item_exist("finestra_richiesta_chiamata"):
-            dpg.delete_item("finestra_richiesta_chiamata")
+        # Utilizziamo un brevissimo timeout per dare tempo ai thread di avviarsi
+        time.sleep(0.1)
+
+        # Mostra la finestra di chiamata - aggiungiamo un flag per tracciare il successo
+        try:
+            # Assicurati che non ci siano finestre di chiamata esistenti
+            if dpg.does_item_exist("finestra_chiamata"):
+                dpg.delete_item("finestra_chiamata")
+
+            # Mostra la nuova finestra di chiamata
+            mostra_finestra_chiamata("ACCEPTED")
+            print("Finestra di chiamata mostrata con successo")
+        except Exception as e:
+            print(f"Errore nel mostrare la finestra di chiamata: {e}")
+            # Tentiamo di nuovo dopo un breve ritardo
+            time.sleep(0.5)
+            try:
+                mostra_finestra_chiamata("ACCEPTED")
+                print("Secondo tentativo di mostrare la finestra riuscito")
+            except Exception as e2:
+                print(f"Fallito anche il secondo tentativo: {e2}")
 
     except Exception as e:
         print(f"Errore nell'accettazione della chiamata: {e}")
@@ -343,7 +364,13 @@ def rifiuta_chiamata(chiChiama, client):
 
 
 def notifica_chiamata(chiChiama, client):
+    """
+    Mostra una finestra di notifica per una chiamata in arrivo e
+    gestisce l'accettazione o il rifiuto della chiamata.
+    """
     global is_video
+
+    # Chiudi eventuali notifiche esistenti prima di crearne una nuova
     if dpg.does_item_exist("finestra_richiesta_chiamata"):
         dpg.delete_item("finestra_richiesta_chiamata")
 
@@ -358,46 +385,53 @@ def notifica_chiamata(chiChiama, client):
     viewport_height = dpg.get_viewport_height()
     window_width = 350
     window_height = 140
+    window_pos = [viewport_width // 2 - window_width // 2, viewport_height // 2 - window_height // 2]
 
     # Crea la finestra di notifica
-    with dpg.window(label=f"{call_type} in arrivo", tag="finestra_richiesta_chiamata",
-                    modal=True, no_collapse=True, no_resize=True,
-                    width=window_width, height=window_height,
-                    pos=[viewport_width // 2 - window_width // 2, viewport_height // 2 - window_height // 2]):
-        # Aggiunge il messaggio della chiamata
-        dpg.add_spacer(height=10)
-        dpg.add_text(f"{chiChiama} ti sta chiamando", color=[255, 255, 255])
-        dpg.add_text(f"Tipo: {call_type}", color=[200, 200, 200])
-        dpg.add_separator()
-        dpg.add_spacer(height=15)
+    try:
+        with dpg.window(label=f"{call_type} in arrivo", tag="finestra_richiesta_chiamata",
+                        modal=True, no_collapse=True, no_resize=True, no_close=True,
+                        width=window_width, height=window_height, pos=window_pos):
 
-        # Aggiungi pulsanti in riga orizzontale per accettare o rifiutare
-        with dpg.group(horizontal=True):
-            # Pulsante Accetta
-            with dpg.theme() as accept_theme:
-                with dpg.theme_component(dpg.mvButton):
-                    dpg.add_theme_color(dpg.mvThemeCol_Button, [46, 120, 50])  # Verde normale
-                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [66, 150, 70])  # Verde hover
-                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [36, 100, 40])  # Verde cliccato
-                    dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+            # Aggiunge il messaggio della chiamata
+            dpg.add_spacer(height=10)
+            dpg.add_text(f"{chiChiama} ti sta chiamando", color=[255, 255, 255])
+            dpg.add_text(f"Tipo: {call_type}", color=[200, 200, 200])
+            dpg.add_separator()
+            dpg.add_spacer(height=15)
 
-            dpg.add_button(label="Accetta", tag="btn_accetta_chiamata", width=150,
-                           callback=lambda: accetta_chiamata(chiChiama, is_video, client))
-            dpg.bind_item_theme(dpg.last_item(), accept_theme)
+            # Aggiungi pulsanti in riga orizzontale per accettare o rifiutare
+            with dpg.group(horizontal=True):
+                # Pulsante Accetta
+                with dpg.theme() as accept_theme:
+                    with dpg.theme_component(dpg.mvButton):
+                        dpg.add_theme_color(dpg.mvThemeCol_Button, [46, 120, 50])  # Verde normale
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [66, 150, 70])  # Verde hover
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [36, 100, 40])  # Verde cliccato
+                        dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
 
-            dpg.add_spacer(width=10)
+                dpg.add_button(label="Accetta", tag="btn_accetta_chiamata", width=150,
+                               callback=lambda: accetta_chiamata(chiChiama, is_video, client))
+                dpg.bind_item_theme(dpg.last_item(), accept_theme)
 
-            # Pulsante Rifiuta
-            with dpg.theme() as reject_theme:
-                with dpg.theme_component(dpg.mvButton):
-                    dpg.add_theme_color(dpg.mvThemeCol_Button, [150, 40, 40])  # Rosso normale
-                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [180, 60, 60])  # Rosso hover
-                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [120, 30, 30])  # Rosso cliccato
-                    dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+                dpg.add_spacer(width=10)
 
-            dpg.add_button(label="Rifiuta", tag="btn_rifiuta_chiamata", width=150,
-                           callback=lambda: rifiuta_chiamata(chiChiama, client))
-            dpg.bind_item_theme(dpg.last_item(), reject_theme)
+                # Pulsante Rifiuta
+                with dpg.theme() as reject_theme:
+                    with dpg.theme_component(dpg.mvButton):
+                        dpg.add_theme_color(dpg.mvThemeCol_Button, [150, 40, 40])  # Rosso normale
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [180, 60, 60])  # Rosso hover
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [120, 30, 30])  # Rosso cliccato
+                        dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+
+                dpg.add_button(label="Rifiuta", tag="btn_rifiuta_chiamata", width=150,
+                               callback=lambda: rifiuta_chiamata(chiChiama, client))
+                dpg.bind_item_theme(dpg.last_item(), reject_theme)
+
+        print(f"Finestra di notifica chiamata creata per {chiChiama}, tipo={call_type}")
+
+    except Exception as e:
+        print(f"Errore nella creazione della finestra di notifica chiamata: {e}")
 
 
 def listen_for_call_request(socket_attesa_chiamate):
