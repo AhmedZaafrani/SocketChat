@@ -1960,6 +1960,9 @@ def gestisci_audio():
 
             except Exception as e:
                 print(f"Errore nell'invio audio: {e}")
+                if "Connessione interrotta dal software del computer host" in e:
+                    termina_chiamata()
+                    chiamata_in_corso = False
                 # Piccola pausa per evitare un ciclo troppo rapido in caso di errore
                 time.sleep(0.01)
 
