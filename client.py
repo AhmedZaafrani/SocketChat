@@ -339,22 +339,43 @@ def notifica_chiamata(chiChiama, client):
 def listen_for_call_request(socket_attesa_chiamate):
     print("avvio thread chiamate ascolto")
     while True:
-        if chiamata_in_corso:
-            continue
         try:
+            if 'chiamata_in_corso' in globals() and chiamata_in_corso:
+                time.sleep(0.5)  # Pausa se c'è già una chiamata in corso
+                continue
+
             client, address = socket_attesa_chiamate.accept()
             data = client.recv(BUFFER_SIZE).decode('utf-8')
             request_keys = data.split(':')
 
+            print(f"Richiesta di chiamata ricevuta: {data}")
+
             # Controlla che ci siano abbastanza elementi dopo lo split
-            if len(request_keys) >= 3:  # Corretto da "request_keys < 3" a "len(request_keys) >= 3"
+            if len(request_keys) >= 3:
                 if request_keys[0] == "CALLREQUEST":
-                    notifica_chiamata(request_keys[1], request_keys[2], client)  # notifico su dearpygui la chiamata
+                    mittente = request_keys[1]
+                    is_video_str = request_keys[2]
+
+                    # Converti il flag video in booleano
+                    global is_video
+                    is_video = (is_video_str.lower() == "true")
+
+                    print(f"Richiesta chiamata da {mittente}, video={is_video}")
+                    notifica_chiamata(mittente, client)
+
+                elif request_keys[0] == "ENDCALL":
+                    # Gestisce la richiesta di terminazione della chiamata
+                    termina_chiamata()
             else:
                 print(f"Dati di chiamata incompleti ricevuti: {data}")
                 client.close()
+
+        except socket.timeout:
+            # Il socket è in modalità non bloccante o ha un timeout
+            continue
         except Exception as e:
             print(f"Errore nella gestione della richiesta di chiamata: {e}")
+            continue
 
 
 def notifica_messaggio_privato(daChi):
@@ -579,6 +600,70 @@ def listen_to_server():
             break
 
     print("Thread di ascolto terminato")
+
+
+def call(ip):
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+
+    try:
+        is_video = False  # Chiamata normale (solo audio)
+
+        print(f"Chiamata in corso verso IP: {ip}, porta: {PORT_CHIAMATE}")
+        socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket_chiamata.settimeout(10)  # Imposta un timeout di 10 secondi
+
+        # Tenta la connessione
+        socket_chiamata.connect((ip, PORT_CHIAMATE))
+        print(f"Connessione stabilita con {ip}:{PORT_CHIAMATE}")
+
+        # Invia richiesta di chiamata
+        request = f"CALLREQUEST:{nome_utente_personale}:{is_video}"
+        print(f"Invio richiesta: {request}")
+        socket_chiamata.send(request.encode('utf-8'))
+
+        # Attendi risposta
+        response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
+        print(f"Risposta ricevuta: {response}")
+
+        if response == "CALLREQUEST:ACCEPT":
+            chiamata_in_corso = True
+            utente_in_chiamata = username_client_chat_corrente
+
+            # Inizializza PyAudio
+            p = pyaudio.PyAudio()
+            audioStream = p.open(
+                format=FORMAT,
+                rate=RATE,
+                channels=CHANNEL,
+                input=True,
+                output=True,
+                frames_per_buffer=CHUNK
+            )
+
+            # Avvia thread audio
+            audio_thread = threading.Thread(target=gestisci_audio)
+            audio_thread.daemon = True
+            audio_thread.start()
+
+            # Mostra finestra di chiamata
+            mostra_finestra_chiamata("ACCEPTED")
+        else:
+            mostra_finestra_chiamata("REFUSED")
+            termina_chiamata()
+
+    except socket.timeout:
+        print(f"Timeout nella connessione a {ip}:{PORT_CHIAMATE}")
+        mostra_finestra_chiamata("TIMEOUT")
+        termina_chiamata()
+    except ConnectionRefusedError:
+        print(f"Connessione rifiutata da {ip}:{PORT_CHIAMATE}")
+        mostra_finestra_chiamata("UNREACHABLE")
+        termina_chiamata()
+    except Exception as e:
+        print(f"Errore durante la chiamata: {e}")
+        mostra_finestra_chiamata("ERROR")
+        termina_chiamata()
+
 
 def call(ip):
     is_video = False
@@ -1297,9 +1382,16 @@ def chiama_privato(is_you_calling):
             dpg.configure_item("btn_chiama_privato", enabled=False)
             dpg.configure_item("btn_videochiama_privato", enabled=False)
             utente_da_chiamare = username_client_chat_corrente
+            utente_in_chiamata = utente_da_chiamare  # Salva il nome utente
+
+            # Invia richiesta IP al server
+            print(f"Richiedo IP per chiamare {utente_da_chiamare}")
             client_socket.send(f"PRIVATE:IP_REQUEST:{utente_da_chiamare}:False".encode('utf-8'))
+
     except Exception as e:
-        print(e)
+        print(f"Errore nella richiesta di chiamata: {e}")
+        dpg.configure_item("btn_chiama_privato", enabled=True)
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
 
 def videochiama_privato(is_you_calling): # se sei tu a chiamare allora t aspetti una risposta
     global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
