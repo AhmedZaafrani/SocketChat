@@ -337,11 +337,20 @@ def notifica_chiamata(chiChiama, client):
 
 
 def listen_for_call_request(socket_attesa_chiamate):
-    client, address = socket_attesa_chiamate.accept()
-    request_keys = client.recv(BUFFER_SIZE).decode('utf-8').split(':')
-    if request_keys < 3:
-        if request_keys[0] == "CALLREQUEST":
-            notifica_chiamata(request_keys[1], request_keys[2], client) # notifico su dearpygui la chiamata e se
+    try:
+        client, address = socket_attesa_chiamate.accept()
+        data = client.recv(BUFFER_SIZE).decode('utf-8')
+        request_keys = data.split(':')
+
+        # Controlla che ci siano abbastanza elementi dopo lo split
+        if len(request_keys) >= 3:  # Corretto da "request_keys < 3" a "len(request_keys) >= 3"
+            if request_keys[0] == "CALLREQUEST":
+                notifica_chiamata(request_keys[1], request_keys[2], client)  # notifico su dearpygui la chiamata
+        else:
+            print(f"Dati di chiamata incompleti ricevuti: {data}")
+            client.close()
+    except Exception as e:
+        print(f"Errore nella gestione della richiesta di chiamata: {e}")
 
 
 def notifica_messaggio_privato(daChi):
@@ -518,6 +527,7 @@ def listen_to_server():
                 keys = msg.split(':')
                 # risposta != "Nessun client con quel nome disponibile"
                 ip_utente_da_chiamare = keys[2]
+                print(ip_utente_da_chiamare)
                 dpg.configure_item("btn_videochiama_privato", enabled=False)
                 dpg.configure_item("btn_chiama_privato", enabled=False)
                 thread_chiama = threading.Thread(target=call, args=(ip_utente_da_chiamare,))
@@ -527,6 +537,7 @@ def listen_to_server():
                 keys = msg.split(':')
                 # risposta != "Nessun client con quel nome disponibile"
                 ip_utente_da_chiamare = keys[2]
+                print(ip_utente_da_chiamare)
                 dpg.configure_item("btn_videochiama_privato", enabled=False)
                 dpg.configure_item("btn_chiama_privato", enabled=False)
                 thread_chiama = threading.Thread(target=videocall, args=(ip_utente_da_chiamare,))
