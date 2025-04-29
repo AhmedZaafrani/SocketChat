@@ -351,16 +351,15 @@ def notifica_messaggio_privato(daChi):
     window_height = 80
     margin = 10  # margine in pixel
     if dpg.get_value("tab_bar") == "chat":
-        if username_client_chat_corrente != daChi:
-            with dpg.window(label=f"private_message", tag="notifica_messaggio_privato",
+        with dpg.window(label=f"private_message", tag="notifica_messaggio_privato",
                             modal=True, no_collapse=True, no_resize=True,
                             width=window_width, height=window_height,
                             pos = [viewport_width - window_width - margin, viewport_height - window_height - margin]):
-                # Aggiunge il messaggio della chiamata
-                dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[255, 255, 255])
-                with dpg.group(horizontal=True):
-                    dpg.add_button(label="Apri", tag="btn_notifica_privata", width=70, callback=lambda: apri_chat_con(daChi))
-                    dpg.add_button(label="Chiudi", tag="btn_destroy_privato", width=70, callback=destroy_notifica)
+            # Aggiunge il messaggio della chiamata
+            dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[255, 255, 255])
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Apri", tag="btn_notifica_privata", width=70, callback=lambda: apri_chat_con(daChi))
+                dpg.add_button(label="Chiudi", tag="btn_destroy_privato", width=70, callback=destroy_notifica)
 
 
 def notifica_messaggio():
@@ -1692,11 +1691,11 @@ def apri_chat_con(utente):
     global username_client_chat_corrente
     print(f"Aprendo chat con {utente}")
 
-    if dpg.does_item_exist('notifica_messaggio_privato'):
-        dpg.delete_item('notifica_messaggio_privato')
+    if dpg.does_item_exist("notifica_messaggio_privato"):
+        dpg.delete_item("notifica_messaggio_privato")
 
-    if dpg.get_value('tab_bar') == 'chat':
-        dpg.set_value('tab_bar', 'chat_private')
+    if dpg.get_value("tab_bar") == "chat":
+        dpg.set_value("tab_bar", "chat_private")
 
     # Imposta l'utente corrente
     username_client_chat_corrente = utente
