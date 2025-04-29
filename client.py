@@ -39,7 +39,7 @@ PORT_ATTESA_CHIAMATE = 12348
 
 # Altre costanti
 
-SERVER_IP = '127.0.0.1' #ip server a cui collegarsi
+SERVER_IP = '172.20.10.3' #ip server a cui collegarsi
 DEFAULT_PORT = 12345
 BUFFER_SIZE = 1024
 
@@ -57,6 +57,7 @@ audioStream = None
 VideoCapture = None
 p = None # istanza di pyaudio
 utente_in_chiamata = ""
+ip_chiamata_destinatario = ""
 
 # altre variabili globali
 
@@ -249,12 +250,28 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
     global socket_chiamata, chiamata_in_corso
     client.send("CALLREQUEST:ACCEPT".encode('utf-8'))
     socket_chiamata = client
+
     chiamata_in_corso = True
+    p = pyaudio.PyAudio()
+    audioStream = p.open(
+        format=FORMAT,
+        rate=RATE,
+        channels=CHANNEL,
+        input=True,
+        output=True,
+        frames_per_buffer=CHUNK
+    )
+
     mostra_finestra_chiamata("ACCEPTED")
+    audio_thread = threading.Thread(target=gestisci_audio)
+    audio_thread.start()
+
+
     if is_videochiamata:
-        videochiama_privato(False)
-    else:
-        chiama_privato(False)
+        VideoCapture = cv2.VideoCapture()
+        video_thread = threading.Thread(target=gestisci_video)
+        video_thread.start()
+
 
 
 def rifiuta_chiamata(chiChiama, client):
@@ -268,7 +285,7 @@ def notifica_chiamata(chiChiama, client):
 
     # Determina il tipo di chiamata per mostrarlo nella notifica
     if is_video:
-        call_tyoe = "Videochiamata"
+        call_type = "Videochiamata"
     else:
         call_type = "Chiamata audio"
 
@@ -321,7 +338,7 @@ def notifica_chiamata(chiChiama, client):
 
 def listen_for_call_request(socket_attesa_chiamate):
     client, address = socket_attesa_chiamate.accept()
-    request_keys = client.recv(BUFFER_SIZE).decode('utf-8').strip(':')
+    request_keys = client.recv(BUFFER_SIZE).decode('utf-8').split(':')
     if request_keys < 3:
         if request_keys[0] == "CALLREQUEST":
             notifica_chiamata(request_keys[1], request_keys[2], client) # notifico su dearpygui la chiamata e se
@@ -406,7 +423,7 @@ def listen_to_server():
                 if "sending_file:" in msg:
                     try:
                         # Formato: PRIVATE:sending_file:mittente:timestamp:nome_file
-                        parts = msg.split(":", 4)
+                        parts = msg.split(":")
                         if len(parts) == 5:
                             sender = parts[2]  # chi ha inviato il file
                             timestamp = parts[3]  # quando è stato inviato
@@ -441,15 +458,15 @@ def listen_to_server():
                         print(f"Errore nell'elaborazione della notifica di file privato: {e}")
 
                 else:
-                    _, private_msg = msg.split(":", 1)
+                    _, private_msg = msg.split(":")
 
                     # Estrai mittente o destinatario
-                    parts = private_msg.split(" - ", 1)
+                    parts = private_msg.split(" - ")
                     if len(parts) == 2:
                         timestamp, content = parts
 
                         if "-->" in content:  # Messaggio in arrivo da un altro utente
-                            sender, message = content.split(" -->", 1)
+                            sender, message = content.split(" -->")
                             print(f"sender: {sender} - message: {message}")
 
                             # Aggiungi alla chat con il mittente
@@ -470,6 +487,24 @@ def listen_to_server():
 
                     # Non mostrare il messaggio privato nella chat globale
                     continue
+
+            if msg.startswith("IP:CALL:"):
+                keys = msg.split(':')
+                # risposta != "Nessun client con quel nome disponibile"
+                ip_utente_da_chiamare = keys[2]
+                dpg.configure_item("btn_videochiama_privato", enabled=False)
+                dpg.configure_item("btn_chiama_privato", enabled=False)
+                thread_chiama = threading.Thread(target=call, args=(ip_utente_da_chiamare,))
+                thread_chiama.start()
+
+            if msg.startswith("IP:VIDEOCALL:"):
+                keys = msg.split(':')
+                # risposta != "Nessun client con quel nome disponibile"
+                ip_utente_da_chiamare = keys[2]
+                dpg.configure_item("btn_videochiama_privato", enabled=False)
+                dpg.configure_item("btn_chiama_privato", enabled=False)
+                thread_chiama = threading.Thread(target=videocall, args=(ip_utente_da_chiamare,))
+                thread_chiama.start()
 
             # Gestione file in arrivo
             if msg == "sending_file":
@@ -504,6 +539,60 @@ def listen_to_server():
 
     print("Thread di ascolto terminato")
 
+def call(ip):
+    is_video = False
+    socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    socket_chiamata.connect((ip, PORT_CHIAMATE))
+    socket_chiamata.send(f"CALLREQUEST:{nome_utente_personale}:{is_video}".encode(
+        'utf-8'))  # is_video è False siccome stiamo chiamando normalmente, sennò True
+    response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
+    if response == "CALLREQUEST:ACCEPT":
+        chiamata_in_corso = True
+        p = pyaudio.PyAudio()
+        audioStream = p.open(
+            format=FORMAT,
+            rate=RATE,
+            channels=CHANNEL,
+            input=True,
+            output=True,
+            frames_per_buffer=CHUNK
+        )
+
+        audio_thread = threading.Thread(target=gestisci_audio)
+        audio_thread.start()
+        mostra_finestra_chiamata("ACCEPTED")
+    else:
+        mostra_finestra_chiamata("REFUSED")
+        termina_chiamata()
+
+def videocall(ip):
+    is_video = True
+    socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    socket_chiamata.connect((ip, PORT_CHIAMATE))
+    socket_chiamata.send(f"CALLREQUEST:{nome_utente_personale}:{is_video}".encode('utf-8'))  # is_video è False siccome stiamo chiamando normalmente, sennò True
+    response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
+    if response == "CALLREQUEST:ACCEPT":
+        chiamata_in_corso = True
+        p = pyaudio.PyAudio()
+        audioStream = p.open(
+            format=FORMAT,
+            rate=RATE,
+            channels=CHANNEL,
+            input=True,
+            output=True,
+            frames_per_buffer=CHUNK
+        )
+
+        VideoCapture = cv2.VideoCapture()
+
+        audio_thread = threading.Thread(target=gestisci_audio)
+        audio_thread.start()
+        video_thread = threading.Thread(target=gestisci_video)
+        video_thread.start()
+        mostra_finestra_chiamata("ACCEPTED")
+    else:
+        mostra_finestra_chiamata("REFUSED")
+        termina_chiamata()
 
 def download_private_file(sender, filename, timestamp, notification_message):
     """Scarica un file inviato in una chat privata"""
@@ -1138,8 +1227,8 @@ def create_gui():
                         with dpg.group(horizontal=True, tag="Nome_chat"):
                             dpg.add_text("Seleziona una chat", tag="titolo_chat_attiva")
                             dpg.add_spacer(width=355)
-                            dpg.add_button(label="Chiama", tag="btn_chiama_privato", callback=chiama_privato, width=70)
-                            dpg.add_button(label="Videochiama", tag="btn_videochiama_privato", callback=videochiama_privato, width=90)
+                            dpg.add_button(label="Chiama", tag="btn_chiama_privato", callback=lambda:chiama_privato(True), width=70)
+                            dpg.add_button(label="Videochiama", tag="btn_videochiama_privato", callback=lambda:videochiama_privato(True), width=90)
 
                         dpg.add_separator()
 
@@ -1167,37 +1256,9 @@ def chiama_privato(is_you_calling):
             dpg.configure_item("btn_chiama_privato", enabled=False)
             dpg.configure_item("btn_videochiama_privato", enabled=False)
             utente_da_chiamare = username_client_chat_corrente
-            client_socket.send(f"PRIVATE:CALLREQUEST:{utente_da_chiamare}".encode('utf-8'))
-            risposta = client_socket.recv(BUFFER_SIZE).decode('utf-8')
-            if risposta != "Nessun client con quel nome disponibile":
-                ip_utente_da_chiamare = risposta
-                socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                socket_chiamata.connect((ip_utente_da_chiamare, PORT_CHIAMATE))
-                socket_chiamata.send(f"CALLREQUEST:{nome_utente_personale}:{is_video}".encode('utf-8'))  # is_video è False siccome stiamo chiamando normalmente, sennò True
-                response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
-                if response == "CALLREQUEST:ACCEPT":
-                    chiamata_in_corso = True
-                    p = pyaudio.PyAudio()
-                    audioStream = p.open(
-                        format=FORMAT,
-                        rate=RATE,
-                        channels=CHANNEL,
-                        input=True,
-                        output=True,
-                        frames_per_buffer=CHUNK
-                    )
-
-                    audio_thread = threading.Thread(target=gestisci_audio)
-                    audio_thread.start()
-                    mostra_finestra_chiamata("ACCEPTED")
-                else:
-                    mostra_finestra_chiamata("REFUSED")
-            else:
-                mostra_finestra_chiamata("USER NOT FOUND")
+            client_socket.send(f"PRIVATE:IP_REQUEST:{utente_da_chiamare}:False".encode('utf-8'))
     except Exception as e:
-        print(f"Errore nell'inizializzazione della chiamata: {e}")
-        termina_chiamata()
-
+        print(e)
 
 def videochiama_privato(is_you_calling): # se sei tu a chiamare allora t aspetti una risposta
     global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
@@ -1207,37 +1268,7 @@ def videochiama_privato(is_you_calling): # se sei tu a chiamare allora t aspetti
             dpg.configure_item("btn_chiama_privato", enabled=False)
             dpg.configure_item("btn_videochiama_privato", enabled=False)
             utente_da_chiamare = username_client_chat_corrente
-            client_socket.send(f"PRIVATE:CALLREQUEST:{utente_da_chiamare}".encode('utf-8'))
-            risposta = client_socket.recv(BUFFER_SIZE).decode('utf-8')
-            if risposta != "Nessun client con quel nome disponibile":
-                ip_utente_da_chiamare = risposta
-                socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                socket_chiamata.connect((ip_utente_da_chiamare, PORT_CHIAMATE))
-                socket_chiamata.send(f"CALLREQUEST:{nome_utente_personale}:{is_video}".encode(
-                    'utf-8'))  # is_video è True siccome stiamo videochiamando, sennò False
-                response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
-                if response == "CALLREQUEST:ACCEPT":
-                    chiamata_in_corso = True
-                    p = pyaudio.PyAudio()
-                    audioStream = p.open(
-                        format=FORMAT,
-                        rate=RATE,
-                        channels=CHANNEL,
-                        input=True,
-                        output=True,
-                        frames_per_buffer=CHUNK
-                    )
-
-                    VideoCapture = cv2.VideoCapture()
-
-                    audio_thread = threading.Thread(target=gestisci_audio)
-                    audio_thread.start()
-                    mostra_finestra_chiamata("ACCEPTED")
-                elif risposta == "CALLREQUEST:REFUSE":
-                    mostra_finestra_chiamata("REFUSED")
-                else:
-                    mostra_finestra_chiamata("USER NOT FOUND")
-
+            client_socket.send(f"PRIVATE:IP_REQUEST:{utente_da_chiamare}:False".encode('utf-8'))
         else:
             chiamata_in_corso = True
             p = pyaudio.PyAudio()
@@ -1473,6 +1504,9 @@ def termina_chiamata():
 
         print("Chiamata terminata")
 
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+        dpg.configure_item("btn_chiama_privato", enabled=True)
+
     except Exception as e:
         print(f"Errore nella terminazione della chiamata: {e}")
 
@@ -1656,6 +1690,9 @@ def apri_chat_con(utente):
 
     if dpg.does_item_exist('notifica_messaggio_privato'):
         dpg.delete_item('notifica_messaggio_privato')
+
+    if dpg.get_value('tab_bar') == 'chat':
+        dpg.set_value('tab_bar', 'chat_private')
 
     # Imposta l'utente corrente
     username_client_chat_corrente = utente

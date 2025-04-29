@@ -212,15 +212,16 @@ def handle_client_connection(client, address):
                         print(f"Errore durante la gestione dell'invio file: {e}")
                     continue
 
-                if message.startswith("PRIVATE:CALLREQUEST"):
-                    parts = message.split(":", 2)
+                if message.startswith("PRIVATE:IP_REQUEST"):
+                    parts = message.split(":")
                     nome_utente_richiesto = parts[2]
                     if nome_utente_richiesto in active_users:
                         recipient_socket = active_users[nome_utente_richiesto]
                         recipient_ip = recipient_socket.getpeername()[0]
-                        client.send(recipient_ip.encode('utf-8'))
+                        client.send(f"IP:CALL:{recipient_ip}".encode('utf-8'))
                     else:
                         client.send("Nessun client con quel nome disponibile".encode('utf-8'))
+
 
                 if message.startswith("PRIVATE:"):
                     if "sending_file:" in message:
