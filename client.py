@@ -39,7 +39,7 @@ PORT_ATTESA_CHIAMATE = 12348
 
 # Altre costanti
 
-SERVER_IP = '172.20.10.3' #ip server a cui collegarsi
+SERVER_IP = "192.168.1.7" #ip server a cui collegarsi
 DEFAULT_PORT = 12345
 BUFFER_SIZE = 1024
 
@@ -217,14 +217,27 @@ def login():
         listen_thread.daemon = True
         listen_thread.start()
 
-        socket_attesa_chiamate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket_attesa_chiamate.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        socket_attesa_chiamate.bind(("0.0.0.0", PORT_ATTESA_CHIAMATE))
-        socket_attesa_chiamate.listen(1)
+        # Crea e configura il socket per le chiamate in arrivo
+        try:
+            socket_attesa_chiamate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_attesa_chiamate.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-        call_requests_thread = threading.Thread(target=listen_for_call_request, args=(socket_attesa_chiamate,))
-        call_requests_thread.daemon = True
-        call_requests_thread.start()
+            # Imposta il socket come non bloccante
+            socket_attesa_chiamate.settimeout(1.0)
+
+            # Binding sul port per le chiamate, ascolta su tutte le interfacce
+            socket_attesa_chiamate.bind(("0.0.0.0", PORT_ATTESA_CHIAMATE))
+            socket_attesa_chiamate.listen(1)
+
+            print(f"Socket per richieste di chiamata configurato su porta {PORT_ATTESA_CHIAMATE}")
+
+            # Avvia il thread di ascolto per le chiamate
+            call_requests_thread = threading.Thread(target=listen_for_call_request, args=(socket_attesa_chiamate,))
+            call_requests_thread.daemon = True
+            call_requests_thread.start()
+        except Exception as e:
+            print(f"Errore nella configurazione del socket per le chiamate: {e}")
+            # Non interrompere il login anche se il setup delle chiamate fallisce
 
         # Mostra la scheda di chat e abilita visivamente
         dpg.configure_item("chat", show=True)
@@ -337,17 +350,37 @@ def notifica_chiamata(chiChiama, client):
 
 
 def listen_for_call_request(socket_attesa_chiamate):
-    print("avvio thread chiamate ascolto")
+    """
+    Thread che ascolta le richieste di chiamata in arrivo.
+    Gestisce le connessioni e notifica l'utente quando arriva una chiamata.
+    """
+    print(f"Avvio thread ascolto chiamate su porta {PORT_ATTESA_CHIAMATE}")
+
+    # Assicurati che il socket sia non bloccante
+    socket_attesa_chiamate.settimeout(1.0)
+
     while True:
         try:
+            # Se c'è già una chiamata in corso, metti in pausa questo thread
             if 'chiamata_in_corso' in globals() and chiamata_in_corso:
-                time.sleep(0.5)  # Pausa se c'è già una chiamata in corso
+                time.sleep(0.5)
                 continue
 
+            # Accetta le connessioni in arrivo
             client, address = socket_attesa_chiamate.accept()
-            data = client.recv(BUFFER_SIZE).decode('utf-8')
-            request_keys = data.split(':')
+            print(f"Richiesta di connessione ricevuta da {address}")
 
+            # Imposta un timeout per la ricezione dei dati
+            client.settimeout(5.0)
+
+            # Ricevi i dati dal client
+            data = client.recv(BUFFER_SIZE).decode('utf-8')
+            if not data:
+                print("Nessun dato ricevuto, chiudo la connessione")
+                client.close()
+                continue
+
+            request_keys = data.split(':')
             print(f"Richiesta di chiamata ricevuta: {data}")
 
             # Controlla che ci siano abbastanza elementi dopo lo split
@@ -371,11 +404,12 @@ def listen_for_call_request(socket_attesa_chiamate):
                 client.close()
 
         except socket.timeout:
-            # Il socket è in modalità non bloccante o ha un timeout
+            # Il socket è in modalità non bloccante, continua con il loop
             continue
         except Exception as e:
             print(f"Errore nella gestione della richiesta di chiamata: {e}")
-            continue
+            # Non far terminare il thread in caso di errore
+            time.sleep(1)  # Pausa breve per evitare cicli di errore troppo rapidi
 
 
 def notifica_messaggio_privato(daChi):
@@ -603,14 +637,23 @@ def listen_to_server():
 
 
 def call(ip):
+    """
+    Inizia una chiamata audio con l'utente all'IP specificato.
+    Gestisce correttamente gli errori e mantiene lo stato dell'interfaccia.
+    """
     global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+
+    # Disabilita immediatamente i pulsanti per evitare chiamate multiple
+    dpg.configure_item("btn_videochiama_privato", enabled=False)
+    dpg.configure_item("btn_chiama_privato", enabled=False)
 
     try:
         is_video = False  # Chiamata normale (solo audio)
+        utente_in_chiamata = username_client_chat_corrente
 
         print(f"Chiamata in corso verso IP: {ip}, porta: {PORT_CHIAMATE}")
         socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket_chiamata.settimeout(10)  # Imposta un timeout di 10 secondi
+        socket_chiamata.settimeout(5)  # Timeout più breve di 5 secondi
 
         # Tenta la connessione
         socket_chiamata.connect((ip, PORT_CHIAMATE))
@@ -627,7 +670,6 @@ def call(ip):
 
         if response == "CALLREQUEST:ACCEPT":
             chiamata_in_corso = True
-            utente_in_chiamata = username_client_chat_corrente
 
             # Inizializza PyAudio
             p = pyaudio.PyAudio()
@@ -663,33 +705,10 @@ def call(ip):
         print(f"Errore durante la chiamata: {e}")
         mostra_finestra_chiamata("ERROR")
         termina_chiamata()
-
-
-def call(ip):
-    is_video = False
-    socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    socket_chiamata.connect((ip, PORT_CHIAMATE))
-    socket_chiamata.send(f"CALLREQUEST:{nome_utente_personale}:{is_video}".encode(
-        'utf-8'))  # is_video è False siccome stiamo chiamando normalmente, sennò True
-    response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
-    if response == "CALLREQUEST:ACCEPT":
-        chiamata_in_corso = True
-        p = pyaudio.PyAudio()
-        audioStream = p.open(
-            format=FORMAT,
-            rate=RATE,
-            channels=CHANNEL,
-            input=True,
-            output=True,
-            frames_per_buffer=CHUNK
-        )
-
-        audio_thread = threading.Thread(target=gestisci_audio)
-        audio_thread.start()
-        mostra_finestra_chiamata("ACCEPTED")
-    else:
-        mostra_finestra_chiamata("REFUSED")
-        termina_chiamata()
+    finally:
+        # Riabilita i pulsanti di chiamata in ogni caso
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+        dpg.configure_item("btn_chiama_privato", enabled=True)
 
 def videocall(ip):
     is_video = True
@@ -1426,34 +1445,84 @@ def videochiama_privato(is_you_calling): # se sei tu a chiamare allora t aspetti
         print(f"Errore nell'inizializzazione della videochiamata: {e}")
         pass
 
+
 def mostra_finestra_chiamata(risposta):
+    """
+    Mostra la finestra di chiamata in base alla risposta ricevuta.
+
+    Risposte possibili:
+    - "ACCEPTED": Chiamata accettata, mostra finestra completa
+    - "REFUSED": Chiamata rifiutata
+    - "UNREACHABLE", "TIMEOUT", "ERROR": Problemi di connessione
+    """
     global utente_in_chiamata
-    with dpg.window(label=f"Chiamo {utente_in_chiamata}", tag="finestra_chiamata", modal=True, width=400, height=500):
-        # Crea le texture per i video
-        with dpg.texture_registry(tag="registro_chiamata"):
-            # Texture per il video del mittente (tu)
-            dpg.add_raw_texture(
-                width=320, height=240,
-                default_value=np.zeros(320 * 240 * 3, dtype=np.float32),  # Texture nera iniziale
-                format=dpg.mvFormat_Float_rgb,
-                tag="texture_mittente"
-            )
 
-            # Texture per il video del destinatario
-            dpg.add_raw_texture(
-                width=320, height=240,
-                default_value=np.zeros(320 * 240 * 3, dtype=np.float32),  # Texture nera iniziale
-                format=dpg.mvFormat_Float_rgb,
-                tag="texture_destinatario"
-            )
+    # Se esiste già una finestra di chiamata, eliminiamola prima
+    if dpg.does_item_exist("finestra_chiamata"):
+        dpg.delete_item("finestra_chiamata")
 
+    # Se esiste già un registro texture, eliminiamolo
+    if dpg.does_item_exist("registro_chiamata"):
+        dpg.delete_item("registro_chiamata")
+
+    # Per gli stati di errore, mostriamo solo un messaggio semplice
+    if risposta in ["UNREACHABLE", "TIMEOUT", "ERROR", "REFUSED"]:
+        with dpg.window(label="Stato chiamata", tag="finestra_chiamata",
+                        modal=True, width=300, height=150, no_close=True):
+            dpg.add_spacer(height=20)
+
+            if risposta == "UNREACHABLE":
+                dpg.add_text(f"Impossibile raggiungere {utente_in_chiamata}.", color=[255, 100, 100])
+                dpg.add_text("L'utente potrebbe essere offline o non disponibile.", wrap=280)
+            elif risposta == "TIMEOUT":
+                dpg.add_text(f"Timeout della connessione con {utente_in_chiamata}.", color=[255, 100, 100])
+                dpg.add_text("La rete potrebbe essere instabile.", wrap=280)
+            elif risposta == "ERROR":
+                dpg.add_text(f"Errore durante la chiamata a {utente_in_chiamata}.", color=[255, 100, 100])
+                dpg.add_text("Si è verificato un problema imprevisto.", wrap=280)
+            elif risposta == "REFUSED":
+                dpg.add_text(f"Chiamata rifiutata da {utente_in_chiamata}.", color=[255, 100, 100])
+                dpg.add_text("L'utente ha rifiutato la chiamata.", wrap=280)
+
+            dpg.add_spacer(height=20)
+            dpg.add_button(label="OK", width=100, callback=lambda: dpg.delete_item("finestra_chiamata"))
+
+        # Riabilitiamo i pulsanti di chiamata
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+        dpg.configure_item("btn_chiama_privato", enabled=True)
+        return
+
+    # Per chiamate accettate, mostra la finestra completa
+    with dpg.window(label=f"Chiamata con {utente_in_chiamata}", tag="finestra_chiamata",
+                    modal=True, width=400, height=500, no_close=True):
+
+        # Crea le texture solo se si tratta di una videochiamata
         if is_video:
+            with dpg.texture_registry(tag="registro_chiamata"):
+                # Texture per il video del mittente (tu)
+                dpg.add_raw_texture(
+                    width=320, height=240,
+                    default_value=np.zeros(320 * 240 * 3, dtype=np.float32),  # Texture nera iniziale
+                    format=dpg.mvFormat_Float_rgb,
+                    tag="texture_mittente"
+                )
+
+                # Texture per il video del destinatario
+                dpg.add_raw_texture(
+                    width=320, height=240,
+                    default_value=np.zeros(320 * 240 * 3, dtype=np.float32),  # Texture nera iniziale
+                    format=dpg.mvFormat_Float_rgb,
+                    tag="texture_destinatario"
+                )
+
             # Collega le immagini alle texture
             dpg.add_image(texture_tag="texture_mittente", tag="video_mittente", width=320, height=240)
             dpg.add_separator()
             dpg.add_image(texture_tag="texture_destinatario", tag="video_destinatario", width=320, height=240)
 
+        # Controlli della chiamata
         with dpg.group(horizontal=True):
+            # Pulsante Termina (rosso)
             with dpg.theme() as termina_theme:
                 with dpg.theme_component(dpg.mvButton):
                     dpg.add_theme_color(dpg.mvThemeCol_Button, [150, 40, 40])  # Rosso normale
@@ -1465,7 +1534,7 @@ def mostra_finestra_chiamata(risposta):
                            callback=termina_chiamata)
             dpg.bind_item_theme(dpg.last_item(), termina_theme)
 
-            # Pulsante Video (blu)
+            # Pulsante Video (blu) - solo per videochiamate
             if is_video:
                 with dpg.theme() as video_theme:
                     with dpg.theme_component(dpg.mvButton):
@@ -1474,7 +1543,7 @@ def mostra_finestra_chiamata(risposta):
                         dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [30, 60, 120])  # Blu cliccato
                         dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
 
-                video_label = "Disattiva Video" if is_video else "Attiva Video"
+                video_label = "Disattiva Video" if is_video_on else "Attiva Video"
                 dpg.add_button(label=video_label, tag="btn_video", width=150, callback=attiva_disattiva_video)
                 dpg.bind_item_theme(dpg.last_item(), video_theme)
 
@@ -1490,17 +1559,6 @@ def mostra_finestra_chiamata(risposta):
             dpg.add_button(label=audio_label, tag="btn_audio", width=150,
                            callback=attiva_disattiva_audio)
             dpg.bind_item_theme(dpg.last_item(), audio_theme)
-
-    if risposta == "ACCEPTED":
-        dpg.set_value("finestra_chiamata", f"Chiamata con {utente_in_chiamata}") # creare la finestra dove il destinatario accetta
-    elif risposta == "REFUSED":
-        dpg.set_value("finestra_chiamata", f"Chiamata rifiutata da {utente_in_chiamata}") # creare la finestra dove il destinatario rifiuta
-        time.sleep(3)
-        dpg.delete_item("finestra_chiamata")
-    else:
-        dpg.set_value("finestra_chiamata", f"{utente_in_chiamata} non trovato!")  # creare la finestra dove il destinatario non si trova
-        time.sleep(3)
-        dpg.delete_item("finestra_chiamata")
 
 def attiva_disattiva_video():
     global is_video_on
@@ -1609,39 +1667,75 @@ def gestisci_audio():
     except Exception as e:
         print(f"Errore nella gestione dell'audio: {e}")
 
-def termina_chiamata():
-    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
-    try:
-        if socket_chiamata and chiamata_in_corso:
-            socket_chiamata.send("ENDCALL".encode('utf-8'))
 
+def termina_chiamata():
+    """
+    Termina la chiamata attiva, rilascia le risorse e ripristina l'interfaccia.
+    """
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+
+    try:
+        # Invia segnale di fine chiamata se possibile
+        if socket_chiamata and chiamata_in_corso:
+            try:
+                socket_chiamata.send("ENDCALL".encode('utf-8'))
+            except:
+                # Ignora errori nella chiusura, perché potremmo già aver perso la connessione
+                pass
+
+        # Ripristina le variabili di stato
         chiamata_in_corso = False
         is_video = False
         utente_in_chiamata = ""
 
+        # Chiudi la connessione
         if socket_chiamata:
-            socket_chiamata.close()
+            try:
+                socket_chiamata.close()
+                socket_chiamata = None
+            except:
+                pass
+
+        # Rilascia risorse PyAudio
+        if audioStream:
+            try:
+                audioStream.stop_stream()
+                audioStream.close()
+                audioStream = None
+            except:
+                pass
 
         if p:
-            p.terminate()
+            try:
+                p.terminate()
+                p = None
+            except:
+                pass
 
-        if audioStream:
-            audioStream.stop_stream()
-            audioStream.close()
-
+        # Rilascia la camera
         if VideoCapture:
-            VideoCapture.release()
+            try:
+                VideoCapture.release()
+                VideoCapture = None
+            except:
+                pass
 
+        # Chiudi la finestra di chiamata se esiste
         if dpg.does_item_exist("finestra_chiamata"):
             dpg.delete_item("finestra_chiamata")
 
-        print("Chiamata terminata")
+        # Chiudi il registro texture se esiste
+        if dpg.does_item_exist("registro_chiamata"):
+            dpg.delete_item("registro_chiamata")
 
-        dpg.configure_item("btn_videochiama_privato", enabled=True)
-        dpg.configure_item("btn_chiama_privato", enabled=True)
+        print("Chiamata terminata")
 
     except Exception as e:
         print(f"Errore nella terminazione della chiamata: {e}")
+    finally:
+        # Riabilita i pulsanti di chiamata in ogni caso
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+        dpg.configure_item("btn_chiama_privato", enabled=True)
 
 def select_private_file():
     #Apre un dialog per selezionare un file da inviare in chat privata
