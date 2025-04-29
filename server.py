@@ -14,7 +14,7 @@ clients = []
 active_users = {}  # username -> socket
 lock = threading.Lock()
 USERS_FILE = "users.json"
-SERVER_IP = '0.0.0.0'
+SERVER_IP = "0.0.0.0"
 PORT = 12345
 MAX_CONNECTIONS = 10
 authorizer = None
@@ -61,7 +61,7 @@ def setup_server_FTP():
     handler.banner = "FTP Server pronto"
 
     try:
-        server_FTP = FTPServer(("0.0.0.0", 12346), handler)
+        server_FTP = FTPServer((SERVER_IP, 12346), handler)
         print("Server FTP inizializzato correttamente")
         server_FTP.serve_forever()
     except Exception as e:
