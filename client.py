@@ -350,11 +350,11 @@ def notifica_messaggio_privato(daChi):
     window_width = 280
     window_height = 80
     margin = 10  # margine in pixel
-    if dpg.get_value("tab_bar") == "chat":
+    if dpg.get_value("tab_bar") != "chat_private":
         with dpg.window(label=f"private_message", tag="notifica_messaggio_privato",
-                            modal=True, no_collapse=True, no_resize=True,
-                            width=window_width, height=window_height,
-                            pos = [viewport_width - window_width - margin, viewport_height - window_height - margin]):
+                        modal=True, no_collapse=True, no_resize=True,
+                        width=window_width, height=window_height,
+                        pos = [viewport_width - window_width - margin, viewport_height - window_height - margin]):
             # Aggiunge il messaggio della chiamata
             dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[255, 255, 255])
             with dpg.group(horizontal=True):
@@ -370,7 +370,7 @@ def notifica_messaggio():
     window_height = 40
     margin = 10  # margine in pixel
 
-    if dpg.get_value("tab_bar") == "chat_private":
+    if dpg.get_value("tab_bar") != "chat":
         if dpg.does_item_exist("notifica_messaggio_globale"):
             dpg.show_item("notifica_messaggio_globale")
         else:
