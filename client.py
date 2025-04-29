@@ -462,10 +462,10 @@ def listen_to_server():
                         print(f"Errore nell'elaborazione della notifica di file privato: {e}")
 
                 else:
-                    _, private_msg = msg.split(":")
+                    _, private_msg = msg.split(":", 1)
 
                     # Estrai mittente o destinatario
-                    parts = private_msg.split(" - ")
+                    parts = private_msg.split(" - ", 1)
                     if len(parts) == 2:
                         timestamp, content = parts
 
