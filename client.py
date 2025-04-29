@@ -39,7 +39,7 @@ PORT_ATTESA_CHIAMATE = 12348
 
 # Altre costanti
 
-SERVER_IP = '127.0.0.1' #ip server a cui collegarsi
+SERVER_IP = '172.20.10.3' #ip server a cui collegarsi
 DEFAULT_PORT = 12345
 BUFFER_SIZE = 1024
 
@@ -340,7 +340,7 @@ def notifica_messaggio_privato(daChi):
         # Aggiunge il messaggio della chiamata
         dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[255, 255, 255])
         with dpg.group(horizontal=True):
-            dpg.add_button(label="Apri", tag="btn_notifica_privata", width=70, callback=lambda: apri_chat_con(daChi))
+            dpg.add_button(label="Apri", tag="btn_notifica_privata", width=70, callback=lambda: apri_privato(daChi))
             dpg.add_button(label="Chiudi", tag="btn_destroy_privato", width=70, callback=destroy_notifica)
 
 
@@ -368,6 +368,12 @@ def apri_globale():
     if dpg.get_value("tab_bar") != "chat":
         dpg.set_value("tab_bar", "chat")  # Cambia tab
 
+def apri_privato(user):
+    destroy_notifica()
+    if dpg.get_value("tab_bar") != "chat_private":
+        dpg.set_value("tab_bar", "chat_private")  # Cambia tab
+    apri_chat_con(user)
+
 def destroy_notifica():
     print("entrato distuggi notifica")
     if dpg.does_item_exist("notifica_messaggio_globale"):
@@ -379,7 +385,7 @@ def destroy_notifica():
 
 def listen_to_server():
     global client_socket, chatlog, ftp_server, utenti_disponibili, chat_attive, username_client_chat_corrente
-
+    time.sleep(0.3)
     while True:
         try:
             msg = client_socket.recv(BUFFER_SIZE).decode("utf-8")
@@ -391,7 +397,14 @@ def listen_to_server():
             # Gestione JSON per la lista utenti
             if msg.startswith("{"):
                 try:
-                    data = json.loads(msg)
+                    keys = msg.split('}')
+                    if keys == 2:
+                        with chatlog_lock:
+                            chatlog = chatlog + "\n" + keys[1]
+                            dpg.set_value("chatlog_field", chatlog)
+                            notifica_messaggio()
+
+                    data = json.loads(keys[0])
                     if data.get("type") == "users_list":
                         utenti_disponibili = data.get("users", [])
                         utenti_disponibili.remove(nome_utente_personale)
@@ -1653,9 +1666,6 @@ def invia_messaggio_privato():
 def apri_chat_con(utente):
     global username_client_chat_corrente
     print(f"Aprendo chat con {utente}")
-
-    if dpg.does_item_exist('notifica_messaggio_privato'):
-        dpg.delete_item('notifica_messaggio_privato')
 
     # Imposta l'utente corrente
     username_client_chat_corrente = utente
