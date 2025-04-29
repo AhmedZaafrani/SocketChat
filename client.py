@@ -1640,6 +1640,11 @@ def videochiama_privato(is_you_calling):  # se sei tu a chiamare allora t aspett
                 print("Errore: nessun contatto selezionato per la videochiamata")
                 dpg.configure_item("btn_chiama_privato", enabled=True)
                 dpg.configure_item("btn_videochiama_privato", enabled=True)
+
+            is_video = True
+            comando = debug_richiesta_ip(utente_da_chiamare, is_video)
+            print(f"Richiedo IP per videochiamare {utente_da_chiamare}")
+            client_socket.send(comando.encode('utf-8'))
     except Exception as e:
         print(f"Errore nella richiesta di videochiamata: {e}")
         dpg.configure_item("btn_chiama_privato", enabled=True)
