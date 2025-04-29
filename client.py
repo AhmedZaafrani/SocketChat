@@ -97,7 +97,7 @@ def get_chat_download_folder(username):
     # Altrimenti, crea una nuova cartella nella directory principale di download
     base_download_folder = 'client_chats_file_directory'
     if not base_download_folder:
-        base_download_folder = os.path.expanduser("~/Downloads")
+        base_download_folder = os.path.join(os.path.expanduser("~"), "Downloads")  # Default
 
     # Crea una cartella con nome dell'utente
     safe_username = "".join(c for c in username if c.isalnum() or c in [' ', '_', '-']).strip()
@@ -275,8 +275,8 @@ def notifica_chiamata(chiChiama, client):
     # Calcola la posizione della finestra per centrarla
     viewport_width = dpg.get_viewport_width()
     viewport_height = dpg.get_viewport_height()
-    window_width = 350
-    window_height = 180
+    window_width = 280
+    window_height = 80
 
     # Crea la finestra di notifica
     with dpg.window(label=f"{call_type} in arrivo", tag="finestra_richiesta_chiamata",
@@ -330,8 +330,8 @@ def listen_for_call_request(socket_attesa_chiamate):
 def notifica_messaggio_privato(daChi):
     viewport_width = dpg.get_viewport_width()
     viewport_height = dpg.get_viewport_height()
-    window_width = 350
-    window_height = 180
+    window_width = 280
+    window_height = 80
     margin = 10  # margine in pixel
     with dpg.window(label=f"private_message", tag="notifica_messaggio_privato",
                     modal=True, no_collapse=True, no_resize=True,
@@ -339,36 +339,40 @@ def notifica_messaggio_privato(daChi):
                     pos = [viewport_width - window_width - margin, viewport_height - window_height - margin]):
         # Aggiunge il messaggio della chiamata
         dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[255, 255, 255])
-        dpg.add_spacer(width=5)
-        dpg.add_button(label="Apri", tag="btn_notifica_privata", width=70, callback=lambda: apri_chat_con(daChi))
-
-        t = threading.Thread(target=destroy_notifica, args=(False,))  # true se è globale
+        with dpg.group(horizontal=True):
+            dpg.add_button(label="Apri", tag="btn_notifica_privata", width=70, callback=lambda: apri_chat_con(daChi))
+            dpg.add_button(label="Chiudi", tag="btn_destroy_privato", width=70, callback=destroy_notifica)
 
 
 def notifica_messaggio():
+    print("notifica")
     viewport_width = dpg.get_viewport_width()
     viewport_height = dpg.get_viewport_height()
-    window_width = 350
-    window_height = 180
+    window_width = 250
+    window_height = 40
     margin = 10  # margine in pixel
-    with dpg.window(label=f"messaggio_globale", tag="notifica_messaggio_globale",
-                    modal=True, no_collapse=True, no_resize=True,
-                    width=window_width, height=window_height,
-                    pos=[viewport_width - window_width - margin, viewport_height - window_height - margin]):
-        # Aggiunge il messaggio della chiamata
-        dpg.add_text(f"Hai ricevuto un messaggio globale", color=[255, 255, 255])
-        dpg.add_spacer(width=5)
-        dpg.add_button(label="Apri", tag="btn_notifica_globale", width=70, callback=apri_globale)
-
-    t = threading.Thread(target=destroy_notifica, args=(True,)) # true se è globale
+    if dpg.does_item_exist("notifica_messaggio_globale"):
+        dpg.show_item("notifica_messaggio_globale")
+    else:
+        with dpg.window(label=f"messaggio_globale", tag="notifica_messaggio_globale",
+                        modal=True, no_collapse=True, no_resize=True,
+                        width=window_width, height=window_height,
+                        pos=[viewport_width - window_width - margin, viewport_height - window_height - margin]):
+            # Aggiunge il messaggio della chiamata
+            dpg.add_text(f"Hai ricevuto un messaggio globale", color=[255, 255, 255])
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Apri", tag="btn_notifica_globale", width=70, callback=apri_globale)
+                dpg.add_button(label="Chiudi", tag="btn_destroy_globale", width=70, callback=destroy_notifica)
 
 def apri_globale():
-    dpg.set_value("tab_bar", "chat")  # Cambia tab
+    if dpg.get_value("tab_bar") != "chat":
+        dpg.set_value("tab_bar", "chat")  # Cambia tab
 
-def destroy_notifica(is_globale):
-    time.sleep(2.5)
-    if is_globale:
+def destroy_notifica():
+    print("entrato distuggi notifica")
+    if dpg.does_item_exist("notifica_messaggio_globale"):
         dpg.delete_item("notifica_messaggio_globale")
+        print("distrutto privato")
     else:
         dpg.delete_item("notifica_messaggio_privato")
 
@@ -462,13 +466,13 @@ def listen_to_server():
                             if sender == username_client_chat_corrente:
                                 dpg.set_value("chatlog_field_privata", chat_attive[sender])
 
-                            notifica_messaggio_privato()
+                            notifica_messaggio_privato(sender)
 
                     # Non mostrare il messaggio privato nella chat globale
                     continue
 
             # Gestione file in arrivo
-            elif msg == "sending_file":
+            if msg == "sending_file":
                 print("Rilevata notifica di invio file")
 
                 # Ricevi timestamp e nome utente
@@ -600,7 +604,7 @@ def download_file(time_stamp_and_user_name, filename):
         # Controlla se esiste una cartella di download configurata
         download_folder = dpg.get_value("cartella_download")
         if not download_folder:
-            download_folder = os.path.expanduser("~/Downloads")  # Default
+            download_folder = os.path.join(os.path.expanduser("~"), "Downloads")  # Default
             print(f"Usando cartella di download predefinita: {download_folder}")
 
         # Assicurati che la cartella esista
@@ -1104,7 +1108,7 @@ def create_gui():
                 # Gruppo per la cartella di download
                 with dpg.group(horizontal=True):
                     dpg.add_input_text(tag="cartella_download", multiline=True, readonly=True,
-                                       default_value=os.path.expanduser("~/Downloads"))
+                                       default_value=os.path.join(os.path.expanduser("~"), "Downloads"))
                     dpg.add_spacer(width=SPACING)
                     dpg.add_button(label="Set Download Folder", tag="btn_selezione_cartella_download",
                                    callback=seleziona_cartella_download)
@@ -1690,7 +1694,8 @@ def inizia_chat_con(utente):
     if utente not in chat_attive:
         chat_attive[utente] = ""
         aggiorna_lista_contatti()
-        private_chat_download_directory = f"/Users/simo/Documents/GitHub/Senza nome/SocketChat/client_chats_file_directory/{utente}"
+        base_dir = os.path.dirname(os.path.abspath(__file__))  # directory corrente dello script
+        private_chat_download_directory = os.path.join(base_dir, "client_chats_file_directory", utente)
         if not os.path.exists(private_chat_download_directory):
             os.makedirs(private_chat_download_directory)
             print(f"Creata cartella di download: {private_chat_download_directory}")

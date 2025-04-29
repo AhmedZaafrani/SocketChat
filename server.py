@@ -369,8 +369,8 @@ def distribute_file_to_clients(sender_client, filename, username):
     fail_count = 0
 
     for client in client_list:
-        #if client == sender_client:
-       #     continue  # Salta il client che ha inviato il file
+        if client == sender_client:
+            continue  # Salta il client che ha inviato il file
 
         try:
             # Invia notifica di file in arrivo
@@ -383,7 +383,7 @@ def distribute_file_to_clients(sender_client, filename, username):
             client.send(f"{timestamp} - {username}".encode('utf-8'))
 
             # Breve pausa per assicurarsi che il client processi il messaggio
-            time.sleep(0.1)
+            time.sleep(0.5)
 
             # Invia nome del file
             client.send(filename.encode('utf-8'))
