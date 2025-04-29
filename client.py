@@ -601,6 +601,8 @@ def download_file(time_stamp_and_user_name, filename):
     global ftp_server, chatlog
 
     try:
+        print(time_stamp_and_user_name)
+        print(filename)
         # Controlla se esiste una cartella di download configurata
         download_folder = dpg.get_value("cartella_download")
         if not download_folder:
