@@ -350,7 +350,7 @@ def notifica_messaggio_privato(daChi):
     window_width = 280
     window_height = 80
     margin = 10  # margine in pixel
-    if dpg.get_value("tab_bar") != "chat_private":
+    if dpg.get_value("tab_bar") == "chat_private":
         with dpg.window(label=f"private_message", tag="notifica_messaggio_privato",
                         modal=True, no_collapse=True, no_resize=True,
                         width=window_width, height=window_height,
