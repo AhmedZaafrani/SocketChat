@@ -337,20 +337,24 @@ def notifica_chiamata(chiChiama, client):
 
 
 def listen_for_call_request(socket_attesa_chiamate):
-    try:
-        client, address = socket_attesa_chiamate.accept()
-        data = client.recv(BUFFER_SIZE).decode('utf-8')
-        request_keys = data.split(':')
+    print("avvio thread chiamate ascolto")
+    while True:
+        if chiamata_in_corso:
+            continue
+        try:
+            client, address = socket_attesa_chiamate.accept()
+            data = client.recv(BUFFER_SIZE).decode('utf-8')
+            request_keys = data.split(':')
 
-        # Controlla che ci siano abbastanza elementi dopo lo split
-        if len(request_keys) >= 3:  # Corretto da "request_keys < 3" a "len(request_keys) >= 3"
-            if request_keys[0] == "CALLREQUEST":
-                notifica_chiamata(request_keys[1], request_keys[2], client)  # notifico su dearpygui la chiamata
-        else:
-            print(f"Dati di chiamata incompleti ricevuti: {data}")
-            client.close()
-    except Exception as e:
-        print(f"Errore nella gestione della richiesta di chiamata: {e}")
+            # Controlla che ci siano abbastanza elementi dopo lo split
+            if len(request_keys) >= 3:  # Corretto da "request_keys < 3" a "len(request_keys) >= 3"
+                if request_keys[0] == "CALLREQUEST":
+                    notifica_chiamata(request_keys[1], request_keys[2], client)  # notifico su dearpygui la chiamata
+            else:
+                print(f"Dati di chiamata incompleti ricevuti: {data}")
+                client.close()
+        except Exception as e:
+            print(f"Errore nella gestione della richiesta di chiamata: {e}")
 
 
 def notifica_messaggio_privato(daChi):
