@@ -311,6 +311,8 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
 
         # Mostra la finestra di chiamata
         mostra_finestra_chiamata("ACCEPTED")
+        if dpg.does_item_exist("finestra_richiesta_chiamata"):
+            dpg.delete_item("finestra_richiesta_chiamata")
 
     except Exception as e:
         print(f"Errore nell'accettazione della chiamata: {e}")
@@ -1631,6 +1633,9 @@ def mostra_finestra_chiamata(risposta):
     if dpg.does_item_exist("registro_chiamata"):
         dpg.delete_item("registro_chiamata")
 
+    if dpg.does_item_exist("registro_chiamata"):
+        dpg.delete_item("registro_chiamata")
+
     # Calcola dimensioni in base al testo e alla viewport
     viewport_width = dpg.get_viewport_width()
     viewport_height = dpg.get_viewport_height()
@@ -1887,7 +1892,7 @@ def gestisci_audio():
         receive_buffer_size = CHUNK * 4  # Buffer più grande per la ricezione
 
         # Loop principale
-        while chiamata_in_corso and socket_chiamata:
+        while chiamata_in_corso:
             # Invio audio
             try:
                 if is_audio_on:
