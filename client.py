@@ -1919,6 +1919,9 @@ def gestisci_audio():
                     pass
                 except Exception as e:
                     print(f"Errore nella ricezione audio: {e}")
+                    if "Connessione in corso interrotta forzatamente dall'host remoto" in e:
+                        termina_chiamata()
+                        chiamata_in_corso = False
                     # Non interrompere il loop per errori minori
 
             except Exception as e:
