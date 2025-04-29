@@ -229,7 +229,7 @@ def login():
         # Mostra la scheda di chat e abilita visivamente
         dpg.configure_item("chat", show=True)
         dpg.configure_item("chat_private", show=True)
-        dpg.set_value("tab_bar", 1)  # Cambia tab
+        dpg.set_value("tab_bar", "chat")  # Cambia tab
         dpg.configure_item("login", show=False)  # Nascondi login tab
 
         # Pulisci messaggio di errore
@@ -409,7 +409,7 @@ def notifica_messaggio():
 
 def apri_globale():
     if dpg.get_value("tab_bar") != 1:
-        dpg.set_value("tab_bar", 1)  # Cambia tab
+        dpg.set_value("tab_bar", "chat")  # Cambia tab
 
 def destroy_notifica():
     print("entrato distuggi notifica")
@@ -1721,7 +1721,7 @@ def apri_chat_con(utente):
     username_client_chat_corrente = utente
 
     if dpg.get_value("tab_bar") != 2:
-        dpg.set_value("tab_bar", 2)
+        dpg.set_value("tab_bar", "chat_private")
 
     # Assicurati che esista una cartella per i download di questa chat
     download_folder = get_chat_download_folder(utente)
