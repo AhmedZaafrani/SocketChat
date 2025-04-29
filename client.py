@@ -260,35 +260,84 @@ def login():
 
 
 def accetta_chiamata(chiChiama, is_videochiamata, client):
-    global socket_chiamata, chiamata_in_corso
-    client.send("CALLREQUEST:ACCEPT".encode('utf-8'))
-    socket_chiamata = client
+    """
+    Accetta una chiamata in arrivo e inizializza le risorse audio/video.
+    """
+    global socket_chiamata, chiamata_in_corso, p, audioStream, VideoCapture, is_video, utente_in_chiamata
 
-    chiamata_in_corso = True
-    p = pyaudio.PyAudio()
-    audioStream = p.open(
-        format=FORMAT,
-        rate=RATE,
-        channels=CHANNEL,
-        input=True,
-        output=True,
-        frames_per_buffer=CHUNK
-    )
+    try:
+        print(f"Accettando chiamata da {chiChiama}, video={is_videochiamata}")
 
-    mostra_finestra_chiamata("ACCEPTED")
-    audio_thread = threading.Thread(target=gestisci_audio)
-    audio_thread.start()
+        # Invia l'accettazione
+        client.send("CALLREQUEST:ACCEPT".encode('utf-8'))
 
+        # Imposta le variabili globali
+        socket_chiamata = client
+        chiamata_in_corso = True
+        is_video = is_videochiamata
+        utente_in_chiamata = chiChiama
 
-    if is_videochiamata:
-        VideoCapture = cv2.VideoCapture()
-        video_thread = threading.Thread(target=gestisci_video)
-        video_thread.start()
+        # Inizializza PyAudio
+        p = pyaudio.PyAudio()
+        audioStream = p.open(
+            format=FORMAT,
+            rate=RATE,
+            channels=CHANNEL,
+            input=True,
+            output=True,
+            frames_per_buffer=CHUNK
+        )
 
+        print("Stream audio inizializzato correttamente")
+
+        # Avvia thread audio
+        audio_thread = threading.Thread(target=gestisci_audio)
+        audio_thread.daemon = True
+        audio_thread.start()
+
+        # Se è una videochiamata, inizializza anche il video
+        if is_videochiamata:
+            print("Inizializzazione webcam...")
+            VideoCapture = cv2.VideoCapture(0)  # 0 è l'indice della webcam predefinita
+
+            # Verifica che la webcam sia stata inizializzata correttamente
+            if not VideoCapture.isOpened():
+                print("Errore: impossibile aprire la webcam")
+            else:
+                print("Webcam inizializzata con successo")
+                video_thread = threading.Thread(target=gestisci_video)
+                video_thread.daemon = True
+                video_thread.start()
+
+        # Mostra la finestra di chiamata
+        mostra_finestra_chiamata("ACCEPTED")
+
+    except Exception as e:
+        print(f"Errore nell'accettazione della chiamata: {e}")
+        if socket_chiamata:
+            socket_chiamata.close()
+            socket_chiamata = None
+
+        # In caso di errore, termina immediatamente la chiamata
+        termina_chiamata()
 
 
 def rifiuta_chiamata(chiChiama, client):
-    client.send("CALLREQUEST:REFUSE".encode('utf-8'))
+    """
+    Rifiuta una chiamata in arrivo e invia la notifica al mittente.
+    """
+    try:
+        print(f"Rifiutando chiamata da {chiChiama}")
+        client.send("CALLREQUEST:REFUSE".encode('utf-8'))
+
+        # Chiudi il socket dopo aver inviato il rifiuto
+        client.close()
+
+        # Chiudi la finestra di notifica
+        if dpg.does_item_exist("finestra_richiesta_chiamata"):
+            dpg.delete_item("finestra_richiesta_chiamata")
+    except Exception as e:
+        print(f"Errore nel rifiuto della chiamata: {e}")
 
 
 def notifica_chiamata(chiChiama, client):
@@ -1817,95 +1866,181 @@ def gestisci_video():
         print(f"Errore nella gestione video P2P: {e}")
         # Non terminare la chiamata, potrebbe essere solo audio
 
+
 def gestisci_audio():
-    global chiamata_in_corso, socket_chiamata, audioStream
+    """
+    Funzione che gestisce lo streaming audio durante una chiamata.
+    Sia invio che ricezione dell'audio.
+    """
+    global chiamata_in_corso, socket_chiamata, audioStream, is_audio_on
+
+    print("Avvio thread gestione audio")
+
+    # Verifica che lo stream audio sia inizializzato
+    if audioStream is None:
+        print("Errore: audioStream non inizializzato")
+        return
+
     try:
+        # Imposta buffer per invio e ricezione
+        buffer_size = CHUNK
+        receive_buffer_size = CHUNK * 4  # Buffer più grande per la ricezione
+
+        # Loop principale
         while chiamata_in_corso and socket_chiamata:
-            #invio audio
-            if is_audio_on:
-                audio_data = audioStream.read(CHUNK, exception_on_overlfow=False)
-                socket_chiamata.send(audio_data)
-
-            #ricevo audio
+            # Invio audio
             try:
-                socket_chiamata.settimeout(0.1) #diamo un minimo di tempo al destinatario di inviare l'audio
-                audio_ricevuto = socket_chiamata.recv(CHUNK * 4) # inserisco il buffer che consiglia la documentazione
-                if audio_ricevuto:
-                    audioStream.write(audio_ricevuto)
-            except socket_chiamata.timeout:
-                pass # vuol dire che non abbiamo ricevuto nessun audio quindi semplicemente continua
-    except Exception as e:
-        print(f"Errore nella gestione dell'audio: {e}")
+                if is_audio_on:
+                    # Leggi dati audio dal microfono
+                    audio_data = audioStream.read(buffer_size, exception_on_overflow=False)
+                    if audio_data:
+                        # Invia i dati audio
+                        socket_chiamata.send(audio_data)
 
+                # Ricezione audio
+                try:
+                    # Imposta un timeout breve per la ricezione
+                    socket_chiamata.settimeout(0.1)
+
+                    # Ricevi dati audio
+                    audio_ricevuto = socket_chiamata.recv(receive_buffer_size)
+
+                    # Riproduci i dati audio se ci sono
+                    if audio_ricevuto and len(audio_ricevuto) > 0:
+                        audioStream.write(audio_ricevuto)
+
+                except socket.timeout:
+                    # Timeout normale, continua il loop
+                    pass
+                except Exception as e:
+                    print(f"Errore nella ricezione audio: {e}")
+                    # Non interrompere il loop per errori minori
+
+            except Exception as e:
+                print(f"Errore nell'invio audio: {e}")
+                # Piccola pausa per evitare un ciclo troppo rapido in caso di errore
+                time.sleep(0.01)
+
+            # Pausa breve per ridurre l'utilizzo della CPU
+            time.sleep(0.001)
+
+    except Exception as e:
+        print(f"Errore critico nella gestione audio: {e}")
+    finally:
+        print("Thread audio terminato")
+
+
+def verifica_connettivita(ip, porta, timeout=2):
+    """
+    Verifica se è possibile stabilire una connessione TCP all'indirizzo e porta specificati.
+    Restituisce True se la connessione è possibile, False altrimenti.
+    """
+    try:
+        # Crea un socket temporaneo
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+
+        # Tenta la connessione
+        result = sock.connect_ex((ip, porta))
+
+        # Chiudi subito il socket
+        sock.close()
+
+        # Se result è 0, la connessione è riuscita
+        return result == 0
+
+    except Exception as e:
+        print(f"Errore nel test di connettività: {e}")
+        return False
 
 def termina_chiamata():
     """
     Termina la chiamata attiva, rilascia le risorse e ripristina l'interfaccia.
+    Chiude correttamente tutte le risorse (socket, audio, video).
     """
     global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
 
+    print("Avvio terminazione chiamata...")
+
+    # Prima di tutto, imposta lo stato come non in chiamata
+    chiamata_in_corso = False
+
+    # Invia segnale di fine chiamata se possibile
+    if socket_chiamata:
+        try:
+            socket_chiamata.send("ENDCALL".encode('utf-8'))
+            print("Inviato segnale ENDCALL al peer")
+        except:
+            print("Impossibile inviare segnale di fine chiamata")
+
+        # Chiudi il socket
+        try:
+            socket_chiamata.close()
+            print("Socket di chiamata chiuso")
+        except:
+            print("Errore nella chiusura del socket")
+
+        socket_chiamata = None
+
+    # Rilascia risorse audio
+    if audioStream:
+        try:
+            audioStream.stop_stream()
+            audioStream.close()
+            print("Stream audio chiuso")
+        except Exception as e:
+            print(f"Errore nella chiusura dello stream audio: {e}")
+
+        audioStream = None
+
+    # Rilascia istanza PyAudio
+    if p:
+        try:
+            p.terminate()
+            print("Istanza PyAudio terminata")
+        except Exception as e:
+            print(f"Errore nella terminazione di PyAudio: {e}")
+
+        p = None
+
+    # Rilascia la camera
+    if VideoCapture:
+        try:
+            VideoCapture.release()
+            print("Webcam rilasciata")
+        except Exception as e:
+            print(f"Errore nel rilascio della webcam: {e}")
+
+        VideoCapture = None
+
+    # Ripristina le variabili di stato
+    is_video = False
+    utente_in_chiamata = ""
+
+    # Chiudi finestra di chiamata se esiste
     try:
-        # Invia segnale di fine chiamata se possibile
-        if socket_chiamata and chiamata_in_corso:
-            try:
-                socket_chiamata.send("ENDCALL".encode('utf-8'))
-            except:
-                # Ignora errori nella chiusura, perché potremmo già aver perso la connessione
-                pass
-
-        # Ripristina le variabili di stato
-        chiamata_in_corso = False
-        is_video = False
-        utente_in_chiamata = ""
-
-        # Chiudi la connessione
-        if socket_chiamata:
-            try:
-                socket_chiamata.close()
-                socket_chiamata = None
-            except:
-                pass
-
-        # Rilascia risorse PyAudio
-        if audioStream:
-            try:
-                audioStream.stop_stream()
-                audioStream.close()
-                audioStream = None
-            except:
-                pass
-
-        if p:
-            try:
-                p.terminate()
-                p = None
-            except:
-                pass
-
-        # Rilascia la camera
-        if VideoCapture:
-            try:
-                VideoCapture.release()
-                VideoCapture = None
-            except:
-                pass
-
-        # Chiudi la finestra di chiamata se esiste
         if dpg.does_item_exist("finestra_chiamata"):
             dpg.delete_item("finestra_chiamata")
+            print("Finestra di chiamata chiusa")
+    except Exception as e:
+        print(f"Errore nella chiusura della finestra di chiamata: {e}")
 
-        # Chiudi il registro texture se esiste
+    # Chiudi registro texture se esiste
+    try:
         if dpg.does_item_exist("registro_chiamata"):
             dpg.delete_item("registro_chiamata")
-
-        print("Chiamata terminata")
-
+            print("Registro texture chiuso")
     except Exception as e:
-        print(f"Errore nella terminazione della chiamata: {e}")
-    finally:
-        # Riabilita i pulsanti di chiamata in ogni caso
+        print(f"Errore nella chiusura del registro texture: {e}")
+
+    print("Chiamata terminata con successo")
+
+    # Riabilita i pulsanti di chiamata
+    try:
         dpg.configure_item("btn_videochiama_privato", enabled=True)
         dpg.configure_item("btn_chiama_privato", enabled=True)
+    except Exception as e:
+        print(f"Errore nella riattivazione dei pulsanti: {e}")
 
 def select_private_file():
     #Apre un dialog per selezionare un file da inviare in chat privata
