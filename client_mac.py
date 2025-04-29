@@ -1,0 +1,2601 @@
+import json
+import os
+import sys
+import tempfile
+import textwrap
+import threading
+import socket
+import datetime
+from string import whitespace
+from ftplib import FTP
+from pyftpdlib.authorizers import DummyAuthorizer
+from pyftpdlib.handlers import FTPHandler
+from pyftpdlib.servers import FTPServer
+import platform
+import subprocess
+import time
+
+
+#import per le chiamate e le videochiamate
+import pyaudio # con questo modulo gestisco l'audio in input e in output
+import numpy as np
+import struct
+import pickle
+import cv2 # con questo modulo gestisco la videocamera e i frame ricevuti dall'altro client
+
+
+import dearpygui.dearpygui as dpg
+from tkfilebrowser import askopendirname, askopenfilename
+from dearpygui.dearpygui import configure_item
+
+
+# Costanti per le chiamate e le videochiamate
+CHUNK = 1024
+FORMAT = pyaudio.paInt16
+CHANNEL = 1
+RATE = 44100 # valore che consiglia la documentazione
+PORT_CHIAMATE = 12347
+PORT_ATTESA_CHIAMATE = 12348
+
+# Altre costanti
+
+SERVER_IP = "192.168.1.7" #ip server a cui collegarsi
+DEFAULT_PORT = 12345
+BUFFER_SIZE = 1024
+
+dpg.create_context()
+dpg.create_viewport(title='Socket Chat', width=950, height=800)
+
+# variabili globali per le chiamate e le videochiamate
+
+chiamata_in_corso = False
+socket_chiamata = None
+is_video = False
+is_audio_on = True
+is_video_on = True
+audioStream = None
+VideoCapture = None
+p = None # istanza di pyaudio
+utente_in_chiamata = ""
+ip_chiamata_destinatario = ""
+
+# altre variabili globali
+
+chatlog_lock = threading.Lock()
+chatlog = ""
+download_folders = {}  # username -> cartella di download per la chat
+client_socket = None
+server_started = False
+nome_utente_personale = ""
+ftp_server = None
+ftp_client = None
+
+# Variabile globale per tracciare lo stato
+file_selection_in_progress = False
+
+# Definisco dimensioni di base per gli elementi
+BUTTON_HEIGHT = 40
+INPUT_HEIGHT = 35
+SPACING = 20
+LOGIN_FORM_WIDTH_RATIO = 0.65  # 50% della larghezza della viewport
+
+utenti_disponibili = []  # Lista di utenti disponibili
+chat_attive = {}  # username -> cronologia chat
+username_client_chat_corrente = ""  # Username del contatto attualmente selezionato
+
+
+def get_chat_download_folder(username):
+    """Restituisce la cartella dedicata per i download di una specifica chat"""
+    global download_folders
+
+    # Se esiste già la cartella per questo utente, restituiscila
+    if username in download_folders:
+        folder = download_folders[username]
+        # Verifica che la cartella esista ancora
+        if os.path.exists(folder):
+            return folder
+
+    # Altrimenti, crea una nuova cartella nella directory principale di download
+    base_download_folder = 'client_chats_file_directory'
+    if not base_download_folder:
+        base_download_folder = os.path.join(os.path.expanduser("~"), "Downloads")  # Default
+
+    # Crea una cartella con nome dell'utente
+    safe_username = "".join(c for c in username if c.isalnum() or c in [' ', '_', '-']).strip()
+    chat_folder = os.path.join(base_download_folder, f"Chat_{safe_username}")
+
+    # Crea la directory se non esiste
+    if not os.path.exists(chat_folder):
+        os.makedirs(chat_folder)
+
+    # Memorizza la cartella per uso futuro
+    download_folders[username] = chat_folder
+
+    return chat_folder
+
+
+def setup_connection_server_FTP():
+    global ftp_server
+    global nome_utente_personale
+
+    try:
+        # Chiudi qualsiasi connessione esistente
+        if ftp_server:
+            try:
+                ftp_server.quit()
+            except:
+                pass
+
+        # Crea una nuova connessione
+        ftp_server = FTP()
+        ftp_server.connect(SERVER_IP, 12346)
+
+        # Ottieni le credenziali
+        username = nome_utente_personale
+        password = dpg.get_value("password")
+
+        # Debug: mostra credenziali
+        print(f"Tentativo login FTP con: {username}:{password}")
+
+        # Login con metodo standard
+        response = ftp_server.login(user=username, passwd=password)
+        print(f"Risposta login FTP: {response}")
+
+        # Verifica se siamo effettivamente loggati
+        ftp_server.sendcmd("PWD")  # Questo comando dovrebbe funzionare solo se siamo loggati
+
+        print(f"Connessione FTP stabilita come {username}")
+        return True
+    except Exception as e:
+        print(f"Errore nella connessione FTP: {e}")
+        return False
+
+
+def registrati():
+    username = dpg.get_value("username")
+    password = dpg.get_value("password")
+
+    if not username or not password:
+        dpg.set_value("logerr", "Username e password sono obbligatori!")
+        return
+
+    try:
+        temp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        temp_socket.connect((SERVER_IP, DEFAULT_PORT))
+        print("sending registered usernamen and password")
+        temp_socket.send(f"REGISTER:{username}:{password}".encode("utf-8"))
+        print("sent registered username and password")
+        response = temp_socket.recv(BUFFER_SIZE).decode("utf-8")
+        print(response)
+
+        dpg.set_value("logerr", response)
+
+        temp_socket.close()
+    except Exception as e:
+        dpg.set_value("logerr", f"Errore durante la registrazione: {str(e)}")
+
+
+def login():
+    global client_socket, server_started, nome_utente_personale
+    username = dpg.get_value("username")
+    password = dpg.get_value("password")
+
+    if not username or not password:
+        dpg.set_value("logerr", "Username e password sono obbligatori!")
+        return
+
+    try:
+        # Prima connettiti al server di chat e autenticati
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        client_socket.connect((SERVER_IP, DEFAULT_PORT))
+
+        # Invia comando di login
+        client_socket.send(f"LOGIN:{username}:{password}".encode("utf-8"))
+
+        # Ricevi risposta
+        response = client_socket.recv(1024).decode("utf-8")
+        splittedResponse = response.split(':', 1)
+
+        if splittedResponse[0] != "Autenticazione riuscita":
+            print("risposta non attesa")
+            dpg.set_value("logerr", response)
+            client_socket.close()
+            return
+
+        # Salva username prima di configurare FTP
+        nome_utente_personale = username
+
+        # Solo dopo l'autenticazione riuscita, connettiti al server FTP
+        ftp_success = setup_connection_server_FTP()
+        if not ftp_success:
+            print("Avviso: La connessione FTP non è riuscita, ma la chat funzionerà comunque")
+            # Non interrompere l'esecuzione, continua con la chat anche se FTP fallisce
+
+        # Avvia thread di ascolto
+        listen_thread = threading.Thread(target=listen_to_server)
+        listen_thread.daemon = True
+        listen_thread.start()
+
+        # Configura socket per le chiamate in arrivo
+        try:
+            # Crea il socket
+            socket_attesa_chiamate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_attesa_chiamate.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            socket_attesa_chiamate.settimeout(1.0)  # Socket non bloccante
+
+            # Legati a PORT_CHIAMATE (non PORT_ATTESA_CHIAMATE)
+            socket_attesa_chiamate.bind(("0.0.0.0", PORT_CHIAMATE))
+            socket_attesa_chiamate.listen(1)
+
+            print(f"Socket per richieste di chiamata configurato su porta {PORT_CHIAMATE}")
+
+            # Avvia thread per ascoltare le chiamate
+            call_requests_thread = threading.Thread(target=listen_for_call_request, args=(socket_attesa_chiamate,))
+            call_requests_thread.daemon = True
+            call_requests_thread.start()
+
+        except Exception as e:
+            print(f"Errore nella configurazione del socket per le chiamate: {e}")
+            # Non fallire il login se il socket per le chiamate non può essere configurato
+
+        # Mostra la scheda di chat e abilita visivamente
+        dpg.configure_item("chat", show=True)
+        dpg.configure_item("chat_private", show=True)
+        dpg.set_value("tab_bar", "chat")  # Cambia tab
+        dpg.configure_item("login", show=False)  # Nascondi login tab
+
+        # Pulisci messaggio di errore
+        dpg.set_value("logerr", "")
+
+        # Aggiorna il flag di server
+        server_started = True
+
+        print(f"Login riuscito come {username}, GUI aggiornata")
+
+    except Exception as e:
+        dpg.set_value("logerr", f"Errore durante il login: {str(e)}")
+        if client_socket:
+            client_socket.close()
+
+
+def accetta_chiamata(chiChiama, is_videochiamata, client):
+    """
+    Accetta una chiamata in arrivo e inizializza le risorse audio/video.
+    """
+    global socket_chiamata, chiamata_in_corso, p, audioStream, VideoCapture, is_video, utente_in_chiamata
+
+    try:
+        print(f"Accettando chiamata da {chiChiama}, video={is_videochiamata}")
+
+        # Chiudi la finestra di richiesta PRIMA di tutto il resto
+        if dpg.does_item_exist("finestra_richiesta_chiamata"):
+            dpg.delete_item("finestra_richiesta_chiamata")
+
+        # Invia l'accettazione
+        client.send("CALLREQUEST:ACCEPT".encode('utf-8'))
+
+        # Imposta le variabili globali
+        socket_chiamata = client
+        chiamata_in_corso = True
+        is_video = is_videochiamata
+        utente_in_chiamata = chiChiama
+
+        # Inizializza PyAudio
+        p = pyaudio.PyAudio()
+        audioStream = p.open(
+            format=FORMAT,
+            rate=RATE,
+            channels=CHANNEL,
+            input=True,
+            output=True,
+            frames_per_buffer=CHUNK
+        )
+
+        print("Stream audio inizializzato correttamente")
+
+        # Avvia thread audio
+        audio_thread = threading.Thread(target=gestisci_audio)
+        audio_thread.daemon = True
+        audio_thread.start()
+
+        # Se è una videochiamata, inizializza anche il video
+        if is_videochiamata:
+            print("Inizializzazione webcam...")
+            VideoCapture = cv2.VideoCapture(0)  # 0 è l'indice della webcam predefinita
+
+            # Verifica che la webcam sia stata inizializzata correttamente
+            if not VideoCapture.isOpened():
+                print("Errore: impossibile aprire la webcam")
+            else:
+                print("Webcam inizializzata con successo")
+                video_thread = threading.Thread(target=gestisci_video)
+                video_thread.daemon = True
+                video_thread.start()
+
+        # Utilizziamo un brevissimo timeout per dare tempo ai thread di avviarsi
+        time.sleep(0.1)
+
+        # Mostra la finestra di chiamata - aggiungiamo un flag per tracciare il successo
+        try:
+            # Assicurati che non ci siano finestre di chiamata esistenti
+            if dpg.does_item_exist("finestra_chiamata"):
+                dpg.delete_item("finestra_chiamata")
+
+            # Mostra la nuova finestra di chiamata
+            mostra_finestra_chiamata("ACCEPTED")
+            print("Finestra di chiamata mostrata con successo")
+        except Exception as e:
+            print(f"Errore nel mostrare la finestra di chiamata: {e}")
+            # Tentiamo di nuovo dopo un breve ritardo
+            time.sleep(0.5)
+            try:
+                mostra_finestra_chiamata("ACCEPTED")
+                print("Secondo tentativo di mostrare la finestra riuscito")
+            except Exception as e2:
+                print(f"Fallito anche il secondo tentativo: {e2}")
+
+    except Exception as e:
+        print(f"Errore nell'accettazione della chiamata: {e}")
+        if socket_chiamata:
+            socket_chiamata.close()
+            socket_chiamata = None
+
+        # In caso di errore, termina immediatamente la chiamata
+        termina_chiamata()
+
+
+def rifiuta_chiamata(chiChiama, client):
+    """
+    Rifiuta una chiamata in arrivo e invia la notifica al mittente.
+    """
+    try:
+        print(f"Rifiutando chiamata da {chiChiama}")
+        client.send("CALLREQUEST:REFUSE".encode('utf-8'))
+
+        # Chiudi il socket dopo aver inviato il rifiuto
+        client.close()
+
+        # Chiudi la finestra di notifica
+        if dpg.does_item_exist("finestra_richiesta_chiamata"):
+            dpg.delete_item("finestra_richiesta_chiamata")
+    except Exception as e:
+        print(f"Errore nel rifiuto della chiamata: {e}")
+
+
+def notifica_chiamata(chiChiama, client):
+    """
+    Mostra una finestra di notifica per una chiamata in arrivo e
+    gestisce l'accettazione o il rifiuto della chiamata.
+    """
+    global is_video
+
+    # Chiudi eventuali notifiche esistenti prima di crearne una nuova
+    if dpg.does_item_exist("finestra_richiesta_chiamata"):
+        dpg.delete_item("finestra_richiesta_chiamata")
+
+    # Determina il tipo di chiamata per mostrarlo nella notifica
+    if is_video:
+        call_type = "Videochiamata"
+    else:
+        call_type = "Chiamata audio"
+
+    # Calcola la posizione della finestra per centrarla
+    viewport_width = dpg.get_viewport_width()
+    viewport_height = dpg.get_viewport_height()
+    window_width = 350
+    window_height = 140
+    window_pos = [viewport_width // 2 - window_width // 2, viewport_height // 2 - window_height // 2]
+
+    # Crea la finestra di notifica
+    try:
+        with dpg.window(label=f"{call_type} in arrivo", tag="finestra_richiesta_chiamata",
+                        modal=True, no_collapse=True, no_resize=True, no_close=True,
+                        width=window_width, height=window_height, pos=window_pos):
+
+            # Aggiunge il messaggio della chiamata
+            dpg.add_spacer(height=10)
+            dpg.add_text(f"{chiChiama} ti sta chiamando", color=[255, 255, 255])
+            dpg.add_text(f"Tipo: {call_type}", color=[200, 200, 200])
+            dpg.add_separator()
+            dpg.add_spacer(height=15)
+
+            # Aggiungi pulsanti in riga orizzontale per accettare o rifiutare
+            with dpg.group(horizontal=True):
+                # Pulsante Accetta
+                with dpg.theme() as accept_theme:
+                    with dpg.theme_component(dpg.mvButton):
+                        dpg.add_theme_color(dpg.mvThemeCol_Button, [46, 120, 50])  # Verde normale
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [66, 150, 70])  # Verde hover
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [36, 100, 40])  # Verde cliccato
+                        dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+
+                dpg.add_button(label="Accetta", tag="btn_accetta_chiamata", width=150,
+                               callback=lambda: accetta_chiamata(chiChiama, is_video, client))
+                dpg.bind_item_theme(dpg.last_item(), accept_theme)
+
+                dpg.add_spacer(width=10)
+
+                # Pulsante Rifiuta
+                with dpg.theme() as reject_theme:
+                    with dpg.theme_component(dpg.mvButton):
+                        dpg.add_theme_color(dpg.mvThemeCol_Button, [150, 40, 40])  # Rosso normale
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [180, 60, 60])  # Rosso hover
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [120, 30, 30])  # Rosso cliccato
+                        dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+
+                dpg.add_button(label="Rifiuta", tag="btn_rifiuta_chiamata", width=150,
+                               callback=lambda: rifiuta_chiamata(chiChiama, client))
+                dpg.bind_item_theme(dpg.last_item(), reject_theme)
+
+        print(f"Finestra di notifica chiamata creata per {chiChiama}, tipo={call_type}")
+
+    except Exception as e:
+        print(f"Errore nella creazione della finestra di notifica chiamata: {e}")
+
+
+def listen_for_call_request(socket_attesa_chiamate):
+    """
+    Thread che ascolta le richieste di chiamata in arrivo.
+    Gestisce le connessioni e notifica l'utente quando arriva una chiamata.
+    """
+    print(f"Avvio thread ascolto chiamate su porta {PORT_CHIAMATE}")
+
+    while True:
+        try:
+            # Se c'è già una chiamata in corso, metti in pausa questo thread
+            if 'chiamata_in_corso' in globals() and chiamata_in_corso:
+                time.sleep(0.5)
+                continue
+
+            # Accetta le connessioni in arrivo con timeout
+            try:
+                client, address = socket_attesa_chiamate.accept()
+                print(f"Nuova richiesta di connessione da {address}")
+
+                # Imposta un timeout per la ricezione
+                client.settimeout(5.0)
+
+                # Ricevi i dati di richiesta chiamata
+                data = client.recv(BUFFER_SIZE).decode('utf-8')
+                if not data:
+                    print("Connessione stabilita ma nessun dato ricevuto, chiudo")
+                    client.close()
+                    continue
+
+                # Log dettagliato per il debug
+                print(f"Dati ricevuti nella richiesta di chiamata: {data}")
+
+                # Elabora i dati ricevuti
+                request_keys = data.split(':')
+
+                # Controlla che ci siano abbastanza elementi dopo lo split
+                if len(request_keys) >= 3 and request_keys[0] == "CALLREQUEST":
+                    mittente = request_keys[1]
+                    is_video_str = request_keys[2]
+
+                    # Assegna il flag video
+                    global is_video, utente_in_chiamata
+                    is_video = (is_video_str.lower() == "true")
+                    utente_in_chiamata = mittente
+
+                    print(f"Ricevuta richiesta di chiamata da {mittente}, video={is_video}")
+
+                    # Mostra notifica di chiamata in arrivo
+                    notifica_chiamata(mittente, client)
+
+                elif len(request_keys) >= 1 and request_keys[0] == "ENDCALL":
+                    # Gestisce la richiesta di terminazione della chiamata
+                    print("Ricevuta richiesta di terminazione chiamata")
+                    termina_chiamata()
+                else:
+                    print(f"Formato dati non riconosciuto: {data}")
+                    client.close()
+
+            except socket.timeout:
+                # Timeout scaduto nella accept() - normale in un socket non bloccante
+                continue
+
+        except Exception as e:
+            print(f"Errore nel thread di ascolto chiamate: {e}")
+            time.sleep(1)  # Breve pausa per evitare loop veloce in caso di errori
+
+
+def notifica_messaggio_privato(daChi):
+    viewport_width = dpg.get_viewport_width()
+    viewport_height = dpg.get_viewport_height()
+    window_width = 280
+    window_height = 100
+    margin = 10  # margine in pixel
+
+    # Controlla quale tab è attualmente visibile/selezionata
+    current_tab = dpg.get_value("tab_bar")
+    # Non mostrare notifiche se l'utente è già nella chat privata
+    if not dpg.is_item_visible(
+            "chat_private") or current_tab != 2:  # Assumo che "chat_private" sia la terza tab (indice 2)
+        if dpg.does_item_exist("notifica_messaggio_privato"):
+            dpg.delete_item("notifica_messaggio_privato")
+
+        with dpg.window(label="Nuovo messaggio privato", tag="notifica_messaggio_privato",
+                        modal=False, no_collapse=True, no_resize=True,
+                        width=window_width, height=window_height,
+                        pos=[viewport_width - window_width - margin,
+                             viewport_height - window_height - margin]):
+            dpg.add_spacer(height=5)
+            dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[255, 255, 255])
+            dpg.add_spacer(height=10)
+            with dpg.group(horizontal=True):
+                dpg.add_button(label="Apri", tag="btn_notifica_privata", width=125,
+                               callback=lambda: apri_chat_con(daChi))
+                dpg.add_spacer(width=10)
+                dpg.add_button(label="Chiudi", tag="btn_destroy_privato", width=125,
+                               callback=destroy_notifica)
+
+
+def notifica_messaggio():
+    print("notifica")
+    viewport_width = dpg.get_viewport_width()
+    viewport_height = dpg.get_viewport_height()
+    window_width = 250
+    window_height = 100
+    margin = 10  # margine in pixel
+
+    # Controlla quale tab è attualmente visibile/selezionata
+    current_tab = dpg.get_value("tab_bar")
+    # Non mostrare notifiche se l'utente è già nella chat globale
+    if not dpg.is_item_visible("chat") or current_tab != 1:  # Assumo che "chat" sia la seconda tab (indice 1)
+        if dpg.does_item_exist("notifica_messaggio_globale"):
+            dpg.show_item("notifica_messaggio_globale")
+            dpg.set_item_pos("notifica_messaggio_globale",
+                             [viewport_width - window_width - margin,
+                              viewport_height - window_height - margin])
+        else:
+            with dpg.window(label="Nuovo messaggio", tag="notifica_messaggio_globale",
+                            modal=False, no_collapse=True, no_resize=True,
+                            width=window_width, height=window_height,
+                            pos=[viewport_width - window_width - margin,
+                                 viewport_height - window_height - margin]):
+                dpg.add_spacer(height=5)
+                dpg.add_text("Hai ricevuto un messaggio globale", color=[255, 255, 255])
+                dpg.add_spacer(height=10)
+                with dpg.group(horizontal=True):
+                    dpg.add_button(label="Apri", tag="btn_notifica_globale", width=110, callback=apri_globale)
+                    dpg.add_spacer(width=10)
+                    dpg.add_button(label="Chiudi", tag="btn_destroy_globale", width=110, callback=destroy_notifica)
+
+
+def apri_globale():
+    if dpg.get_value("tab_bar") != 1:
+        dpg.set_value("tab_bar", "chat")  # Cambia tab
+
+def destroy_notifica():
+    print("entrato distuggi notifica")
+    if dpg.does_item_exist("notifica_messaggio_globale"):
+        dpg.delete_item("notifica_messaggio_globale")
+        print("distrutto privato")
+    else:
+        dpg.delete_item("notifica_messaggio_privato")
+
+
+def listen_to_server():
+    global client_socket, chatlog, ftp_server, utenti_disponibili, chat_attive, username_client_chat_corrente
+
+    while True:
+        try:
+            msg = client_socket.recv(BUFFER_SIZE).decode("utf-8")
+            if not msg:
+                break
+
+            print(f"Messaggio ricevuto: {msg}")  # Debug
+
+            # Gestione JSON per la lista utenti
+            if msg.startswith("{"):
+                try:
+                    data = json.loads(msg)
+                    if data.get("type") == "users_list":
+                        utenti_disponibili = data.get("users", [])
+                        utenti_disponibili.remove(nome_utente_personale)
+                        print(f"Lista utenti aggiornata: {utenti_disponibili}")
+                        continue  # Salta il resto del processing
+                except Exception as e:
+                    print(f"Errore nel parsing JSON: {e}")
+                    # Se non è un JSON valido, procedi come messaggio normale
+
+            # Gestione messaggi privati
+            if msg.startswith("PRIVATE:"):
+                if "sending_file:" in msg:
+                    try:
+                        # Formato: PRIVATE:sending_file:mittente:timestamp:nome_file
+                        parts = msg.split(":")
+                        if len(parts) == 5:
+                            sender = parts[2]  # chi ha inviato il file
+                            timestamp = parts[3]  # quando è stato inviato
+                            filename = parts[4]  # nome del file
+
+                            print(f"Notifica di file privato: {sender} ha inviato {filename}")
+
+                            # Assicurati che ci sia una chat con il mittente
+                            if sender not in chat_attive:
+                                chat_attive[sender] = ""
+                                aggiorna_lista_contatti()
+
+                            # Aggiungi messaggio di notifica alla chat
+                            file_notification = f"\n{timestamp} - {sender} --> Ha inviato il file {filename}. Download in corso..."
+                            chat_attive[sender] += file_notification
+
+                            # Aggiorna la visualizzazione se è la chat corrente
+                            if sender == username_client_chat_corrente:
+                                dpg.set_value("chatlog_field_privata", chat_attive[sender])
+
+                            # Avvia un thread per il download in background
+                            download_thread = threading.Thread(
+                                target=download_private_file,
+                                args=(sender, filename, timestamp, file_notification),
+                                daemon=True
+                            )
+                            download_thread.start()
+
+                        # Non processare oltre questo messaggio
+                        continue
+                    except Exception as e:
+                        print(f"Errore nell'elaborazione della notifica di file privato: {e}")
+
+                else:
+                    _, private_msg = msg.split(":", 1)
+
+                    # Estrai mittente o destinatario
+                    parts = private_msg.split(" - ", 1)
+                    if len(parts) == 2:
+                        timestamp, content = parts
+
+                        if "-->" in content:  # Messaggio in arrivo da un altro utente
+                            sender, message = content.split(" -->")
+                            print(f"sender: {sender} - message: {message}")
+
+                            # Aggiungi alla chat con il mittente
+                            if sender not in chat_attive:
+                                print(f"entrato in sender not in chat_attive - chat attive: {chat_attive}")
+                                chat_attive[sender] = ""
+                                # Aggiorna la lista dei contatti
+                                aggiorna_lista_contatti()
+
+                            # Aggiungi il messaggio alla chat con formato standardizzato
+                            chat_attive[sender] += f"\n{timestamp} - {sender} -->{message}"
+
+                            # Se è la chat corrente, aggiorna la visualizzazione
+                            if sender == username_client_chat_corrente:
+                                dpg.set_value("chatlog_field_privata", chat_attive[sender])
+
+                            notifica_messaggio_privato(sender)
+
+                    # Non mostrare il messaggio privato nella chat globale
+                    continue
+
+            if msg.startswith("IP:CALL:"):
+                keys = msg.split(':')
+                # risposta != "Nessun client con quel nome disponibile"
+                ip_utente_da_chiamare = keys[2]
+                print(ip_utente_da_chiamare)
+                dpg.configure_item("btn_videochiama_privato", enabled=False)
+                dpg.configure_item("btn_chiama_privato", enabled=False)
+                thread_chiama = threading.Thread(target=call, args=(ip_utente_da_chiamare,))
+                thread_chiama.start()
+
+            if msg.startswith("IP:VIDEOCALL:"):
+                keys = msg.split(':')
+                # risposta != "Nessun client con quel nome disponibile"
+                ip_utente_da_chiamare = keys[2]
+                print(ip_utente_da_chiamare)
+                dpg.configure_item("btn_videochiama_privato", enabled=False)
+                dpg.configure_item("btn_chiama_privato", enabled=False)
+                thread_chiama = threading.Thread(target=videocall, args=(ip_utente_da_chiamare,))
+                thread_chiama.start()
+
+            # Gestione file in arrivo
+            if msg == "sending_file":
+                print("Rilevata notifica di invio file")
+
+                # Ricevi timestamp e nome utente
+                time_stamp_and_user_name = client_socket.recv(BUFFER_SIZE).decode("utf-8")
+                print(f"Ricevuto timestamp e utente: {time_stamp_and_user_name}")
+
+                # Ricevi il nome del file
+                filename = client_socket.recv(BUFFER_SIZE).decode("utf-8")
+                print(f"Ricevuto nome file: {filename}")
+
+                # Crea un thread separato per il download del file
+                download_thread = threading.Thread(
+                    target=download_file,
+                    args=(time_stamp_and_user_name, filename),
+                    daemon=True
+                )
+                download_thread.start()
+
+            # Messaggi normali per la chat globale
+            else:
+                with chatlog_lock:
+                    chatlog = chatlog + "\n" + msg
+                    dpg.set_value("chatlog_field", chatlog)
+                    notifica_messaggio()
+
+        except Exception as e:
+            print(f"Error in listen_to_server: {e}")
+            break
+
+    print("Thread di ascolto terminato")
+
+
+def call(ip):
+    """
+    Inizia una chiamata audio con l'utente all'IP specificato.
+    Gestisce correttamente gli errori e mantiene lo stato dell'interfaccia.
+    """
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+
+    # Disabilita immediatamente i pulsanti per evitare chiamate multiple
+    dpg.configure_item("btn_videochiama_privato", enabled=False)
+    dpg.configure_item("btn_chiama_privato", enabled=False)
+
+    try:
+        is_video = False  # Chiamata normale (solo audio)
+        utente_in_chiamata = username_client_chat_corrente
+
+        print(f"Chiamata in corso verso IP: {ip}, porta: {PORT_CHIAMATE}")
+        socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket_chiamata.settimeout(5)  # Timeout più breve di 5 secondi
+
+        # Tenta la connessione
+        try:
+            socket_chiamata.connect((ip, PORT_CHIAMATE))
+            print(f"Connessione stabilita con {ip}:{PORT_CHIAMATE}")
+        except ConnectionRefusedError:
+            print(f"Connessione rifiutata da {ip}:{PORT_CHIAMATE}")
+            mostra_finestra_chiamata("UNREACHABLE")
+            termina_chiamata()
+            return
+        except socket.timeout:
+            print(f"Timeout nella connessione a {ip}:{PORT_CHIAMATE}")
+            mostra_finestra_chiamata("TIMEOUT")
+            termina_chiamata()
+            return
+        except Exception as e:
+            print(f"Errore di connessione: {e}")
+            mostra_finestra_chiamata("ERROR")
+            termina_chiamata()
+            return
+
+        # Invia richiesta di chiamata - IMPORTANTE: Nome mittente
+        request = f"CALLREQUEST:{nome_utente_personale}:{is_video}"
+        print(f"Invio richiesta: {request}")
+        socket_chiamata.send(request.encode('utf-8'))
+
+        # Attendi risposta
+        try:
+            response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
+            print(f"Risposta ricevuta: {response}")
+        except socket.timeout:
+            print("Timeout in attesa di risposta alla richiesta di chiamata")
+            mostra_finestra_chiamata("TIMEOUT")
+            termina_chiamata()
+            return
+        except Exception as e:
+            print(f"Errore nella ricezione della risposta: {e}")
+            mostra_finestra_chiamata("ERROR")
+            termina_chiamata()
+            return
+
+        if response == "CALLREQUEST:ACCEPT":
+            chiamata_in_corso = True
+
+            # Inizializza PyAudio
+            p = pyaudio.PyAudio()
+            audioStream = p.open(
+                format=FORMAT,
+                rate=RATE,
+                channels=CHANNEL,
+                input=True,
+                output=True,
+                frames_per_buffer=CHUNK
+            )
+
+            # Avvia thread audio
+            audio_thread = threading.Thread(target=gestisci_audio)
+            audio_thread.daemon = True
+            audio_thread.start()
+
+            # Mostra finestra di chiamata
+            mostra_finestra_chiamata("ACCEPTED")
+        else:
+            print(f"Chiamata rifiutata: {response}")
+            mostra_finestra_chiamata("REFUSED")
+            termina_chiamata()
+
+    except Exception as e:
+        print(f"Errore generale durante la chiamata: {e}")
+        mostra_finestra_chiamata("ERROR")
+        termina_chiamata()
+    finally:
+        # Riabilita i pulsanti di chiamata in ogni caso
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+        dpg.configure_item("btn_chiama_privato", enabled=True)
+
+
+def debug_richiesta_ip(destinatario, is_video):
+    """
+    Funzione di supporto per debuggare la richiesta IP
+    Utile per verificare che la richiesta al server sia formattata correttamente
+    """
+    print("\n--- Debug richiesta IP ---")
+    print(f"Destinatario: {destinatario}")
+    print(f"Is video: {is_video}")
+
+    # Costruisci il comando corretto
+    is_video_str = "True" if is_video else "False"
+    comando = f"PRIVATE:IP_REQUEST:{destinatario}:{is_video_str}"
+    print(f"Comando da inviare: {comando}")
+
+    # Ritorna il comando per uso immediato
+    return comando
+
+def videocall(ip):
+    """
+    Inizia una videochiamata con l'utente all'IP specificato.
+    """
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+
+    # Disabilita immediatamente i pulsanti per evitare chiamate multiple
+    dpg.configure_item("btn_videochiama_privato", enabled=False)
+    dpg.configure_item("btn_chiama_privato", enabled=False)
+
+    try:
+        is_video = True  # Videochiamata (audio + video)
+        utente_in_chiamata = username_client_chat_corrente
+
+        print(f"Videochiamata in corso verso IP: {ip}, porta: {PORT_CHIAMATE}")
+        socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket_chiamata.settimeout(5)  # Timeout più breve di 5 secondi
+
+        # Tenta la connessione
+        try:
+            socket_chiamata.connect((ip, PORT_CHIAMATE))
+            print(f"Connessione stabilita con {ip}:{PORT_CHIAMATE}")
+        except ConnectionRefusedError:
+            print(f"Connessione rifiutata da {ip}:{PORT_CHIAMATE}")
+            mostra_finestra_chiamata("UNREACHABLE")
+            termina_chiamata()
+            return
+        except socket.timeout:
+            print(f"Timeout nella connessione a {ip}:{PORT_CHIAMATE}")
+            mostra_finestra_chiamata("TIMEOUT")
+            termina_chiamata()
+            return
+        except Exception as e:
+            print(f"Errore di connessione: {e}")
+            mostra_finestra_chiamata("ERROR")
+            termina_chiamata()
+            return
+
+        # Invia richiesta di chiamata - IMPORTANTE: Nome mittente
+        request = f"CALLREQUEST:{nome_utente_personale}:{is_video}"
+        print(f"Invio richiesta: {request}")
+        socket_chiamata.send(request.encode('utf-8'))
+
+        # Attendi risposta
+        try:
+            response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
+            print(f"Risposta ricevuta: {response}")
+        except socket.timeout:
+            print("Timeout in attesa di risposta alla richiesta di videochiamata")
+            mostra_finestra_chiamata("TIMEOUT")
+            termina_chiamata()
+            return
+        except Exception as e:
+            print(f"Errore nella ricezione della risposta: {e}")
+            mostra_finestra_chiamata("ERROR")
+            termina_chiamata()
+            return
+
+        if response == "CALLREQUEST:ACCEPT":
+            chiamata_in_corso = True
+
+            # Inizializza PyAudio
+            p = pyaudio.PyAudio()
+            audioStream = p.open(
+                format=FORMAT,
+                rate=RATE,
+                channels=CHANNEL,
+                input=True,
+                output=True,
+                frames_per_buffer=CHUNK
+            )
+
+            # Inizializza VideoCapture
+            VideoCapture = cv2.VideoCapture(0)  # 0 è la webcam predefinita
+
+            # Verifica che la webcam sia stata aperta correttamente
+            if not VideoCapture.isOpened():
+                print("Errore: impossibile aprire la webcam")
+            else:
+                print("Webcam inizializzata con successo")
+
+            # Avvia thread audio e video
+            audio_thread = threading.Thread(target=gestisci_audio)
+            audio_thread.daemon = True
+            audio_thread.start()
+
+            video_thread = threading.Thread(target=gestisci_video)
+            video_thread.daemon = True
+            video_thread.start()
+
+            # Mostra finestra di chiamata
+            mostra_finestra_chiamata("ACCEPTED")
+        else:
+            print(f"Videochiamata rifiutata: {response}")
+            mostra_finestra_chiamata("REFUSED")
+            termina_chiamata()
+
+    except Exception as e:
+        print(f"Errore generale durante la videochiamata: {e}")
+        mostra_finestra_chiamata("ERROR")
+        termina_chiamata()
+    finally:
+        # Riabilita i pulsanti di chiamata in ogni caso
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+        dpg.configure_item("btn_chiama_privato", enabled=True)
+
+def download_private_file(sender, filename, timestamp, notification_message):
+    """Scarica un file inviato in una chat privata"""
+    try:
+        # Ottieni cartella dedicata per questa chat
+
+        download_folder = get_chat_download_folder(sender)
+
+        print(f"filename prima dello split = {filename}")
+        parts = filename.split(":", 2)
+        filename = parts[2]
+        print(f"filename dopo lo split = {filename}")
+
+        print(f"Download di {filename} da {sender} nella cartella {download_folder}")
+
+        # Percorso completo del file
+        file_path = os.path.join(download_folder, filename)
+
+        # Effettua la connessione FTP e scarica il file
+        ftp_success = setup_connection_server_FTP()
+        if not ftp_success:
+            error_msg = f"\n{timestamp} - {sender} --> Impossibile scaricare il file {filename}: errore connessione FTP"
+            update_private_chat(sender, notification_message, error_msg)
+            return
+
+        # Tentativo di download
+        max_attempts = 5
+        download_successful = False
+
+        for attempt in range(max_attempts):
+            try:
+                # Lista i file disponibili
+                files = ftp_server.nlst()
+
+                if filename not in files:
+                    print(f"File {filename} non trovato, tentativo {attempt + 1}/{max_attempts}")
+                    time.sleep(2)
+                    continue
+
+                # Scarica il file
+
+                with open(file_path, 'wb') as local_file:
+                    ftp_server.retrbinary(f"RETR {filename}", local_file.write)
+
+                # Verifica che il file sia stato scaricato correttamente
+                if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                    download_successful = True
+                    break
+
+            except Exception as e:
+                print(f"Errore tentativo {attempt + 1}: {e}")
+                time.sleep(2)
+
+        # Aggiorna la chat in base al risultato
+        if download_successful:
+            success_msg = f"\n{timestamp} - {sender} --> Ha inviato il file {filename}. Download completato."
+            update_private_chat(sender, notification_message, success_msg)
+
+            # Apri la cartella di download
+            try:
+                system = platform.system()
+                if system == 'Windows':
+                    subprocess.Popen(f'explorer /select,"{file_path}"')
+                elif system == 'Darwin':  # macOS
+                    subprocess.Popen(['open', '-R', file_path])
+                else:  # Linux e altri sistemi
+                    subprocess.Popen(['xdg-open', os.path.dirname(file_path)])
+            except Exception as e:
+                print(f"Errore nell'apertura del file explorer: {e}")
+        else:
+            error_msg = f"\n{timestamp} - {sender} --> Impossibile scaricare il file {filename} dopo {max_attempts} tentativi"
+            update_private_chat(sender, notification_message, error_msg)
+
+    except Exception as e:
+        print(f"Errore globale durante il download del file privato: {e}")
+        error_msg = f"\n{timestamp} - {sender} --> Errore durante il download di {filename}: {str(e)}"
+        update_private_chat(sender, notification_message, error_msg)
+
+
+def update_private_chat(username, old_message, new_message):
+    """Aggiorna un messaggio nella chat privata"""
+    global chat_attive
+
+    if username in chat_attive:
+        # Sostituisci il vecchio messaggio con il nuovo
+        chat_attive[username] = chat_attive[username].replace(old_message, new_message)
+
+        # Aggiorna la visualizzazione se è la chat attiva
+        if username == username_client_chat_corrente:
+            dpg.set_value("chatlog_field_privata", chat_attive[username])
+
+
+def download_file(time_stamp_and_user_name, filename):
+    """Thread separato per gestire il download di un file"""
+    global ftp_server, chatlog
+
+    try:
+        print(time_stamp_and_user_name)
+        print(filename)
+        # Controlla se esiste una cartella di download configurata
+        download_folder = dpg.get_value("cartella_download")
+        if not download_folder:
+            download_folder = os.path.join(os.path.expanduser("~"), "Downloads")  # Default
+            print(f"Usando cartella di download predefinita: {download_folder}")
+
+        # Assicurati che la cartella esista
+        if not os.path.exists(download_folder):
+            os.makedirs(download_folder)
+            print(f"Creata cartella di download: {download_folder}")
+
+        # Percorso completo del file da scaricare
+        file_path = os.path.join(download_folder, filename)
+        print(f"Percorso completo del file: {file_path}")
+
+        # Attendi un po' prima di iniziare il download
+        # Questo dà tempo al server FTP di completare il caricamento
+        time.sleep(1)
+
+        # Tenta di riconnettersi all'FTP per diverse volte
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            try:
+                print(f"Tentativo di connessione FTP {attempt + 1}/{max_attempts}...")
+                ftp_success = setup_connection_server_FTP()
+
+                if not ftp_success:
+                    print(f"Tentativo {attempt + 1} fallito, riprovo...")
+                    time.sleep(2)  # Attesa tra i tentativi
+                    continue
+
+                # Lista i file disponibili (debug)
+                print("File disponibili sul server:")
+                files = ftp_server.nlst()
+                print(files)
+
+                if filename not in files:
+                    print(f"File {filename} non trovato sul server, riprovo...")
+                    time.sleep(2)
+                    continue
+
+                # Scarica il file
+                with open(file_path, 'wb') as local_file:
+                    print(f"Tentativo di download di {filename}...")
+                    ftp_server.retrbinary(f"RETR {filename}", local_file.write)
+
+                print(f"File scaricato con successo in: {file_path}")
+
+                # Se siamo arrivati qui, il download è riuscito
+                break
+
+            except Exception as e:
+                print(f"Errore durante il tentativo {attempt + 1} di download: {e}")
+                time.sleep(2)  # Attesa tra i tentativi
+
+        # Verifica se il file esiste e ha dimensione > 0
+        if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+            # Apri la cartella di download nel file explorer
+            system = platform.system()
+            print(f"Sistema operativo rilevato: {system}")
+
+            try:
+                if system == 'Windows':
+                    # Per Windows: usa explorer.exe
+                    subprocess.Popen(f'explorer /select,"{file_path}"')
+                elif system == 'Darwin':  # macOS o Sequoia
+                    # Per macOS: usa il comando open
+                    subprocess.Popen(['open', '-R', file_path])
+                else:  # Linux e altri sistemi
+                    subprocess.Popen(['xdg-open', os.path.dirname(file_path)])
+
+                print("File explorer aperto correttamente")
+
+                # Aggiorna il log della chat per indicare download completato
+                with chatlog_lock:
+                    chatlog = chatlog + "\n" + time_stamp_and_user_name + f": Ha inviato un file ({filename}) - Download completato"
+                    dpg.set_value("chatlog_field", chatlog)
+
+            except Exception as e:
+                print(f"Errore nell'apertura del file explorer: {e}")
+        else:
+            print(f"Download fallito: file {filename} non trovato o vuoto")
+            # Aggiorna comunque il log della chat
+            with chatlog_lock:
+                chatlog = chatlog + "\n" + time_stamp_and_user_name + f": Ha inviato un file ({filename}) - Download fallito"
+                dpg.set_value("chatlog_field", chatlog)
+
+    except Exception as e:
+        print(f"Errore durante il download del file: {e}")
+        # Aggiorna il log della chat anche in caso di errore
+        with chatlog_lock:
+            chatlog = chatlog + "\n" + time_stamp_and_user_name + f": Ha inviato un file ({filename}) - Errore nel download"
+            dpg.set_value("chatlog_field", chatlog)
+
+
+def invia():
+    global client_socket, chatlog, nome_utente_personale, ftp_server
+    msg = dpg.get_value("input_txt")
+    file_field = dpg.get_value("file_field")
+
+    # Verifica se sono entrambi vuoti
+    if not msg and not file_field:
+        print("Niente da inviare: sia messaggio che file sono vuoti")
+        return
+
+    timestamp = str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    # Priorità all'invio del file
+    if file_field:
+        print(f"Tentativo di invio file: {file_field}")
+        try:
+            # Verifica che il file esista
+            if not os.path.exists(file_field):
+                error_msg = f"Errore: il file {file_field} non esiste"
+                print(error_msg)
+                dpg.set_value("logerr", error_msg)
+                return
+
+            # Verifica che il file non sia vuoto
+            if os.path.getsize(file_field) == 0:
+                error_msg = "Errore: il file è vuoto"
+                print(error_msg)
+                dpg.set_value("logerr", error_msg)
+                return
+
+            # Ottieni il nome del file dal percorso
+            name_file = os.path.basename(file_field)
+
+            # Forza una riconnessione FTP
+            print("Effettuo una nuova connessione FTP...")
+            ftp_success = setup_connection_server_FTP()
+
+            if not ftp_success:
+                dpg.set_value("logerr", "Errore nella connessione FTP. Impossibile inviare il file.")
+                return
+
+            # Aggiungi messaggio al log della chat (prima dell'invio)
+            with chatlog_lock:
+                chatlog = chatlog + f"\n{timestamp} - {nome_utente_personale}: Invio del file {name_file} in corso..."
+                dpg.set_value("chatlog_field", chatlog)
+
+            # Invia il file tramite FTP
+            with open(file_field, 'rb') as file:
+                print(f"Invio del file {name_file} in corso...")
+                ftp_server.storbinary(f"STOR {name_file}", file)
+                print(f"File {name_file} inviato con successo")
+
+            # Dopo il caricamento FTP, notifica il server
+            client_socket.send("sending_file".encode("utf-8"))
+            time.sleep(0.1)  # Piccola pausa per assicurarsi che i messaggi non si sovrappongano
+            client_socket.send(name_file.encode("utf-8"))
+
+            # Aggiorna il messaggio nel log della chat
+            with chatlog_lock:
+                chatlog = chatlog + f"\n{timestamp} - {nome_utente_personale}: File {name_file} inviato con successo"
+                dpg.set_value("chatlog_field", chatlog)
+
+            # Pulisci il campo file dopo l'invio
+            dpg.set_value("file_field", "")
+
+            # Pulisci eventuali messaggi di errore
+            dpg.set_value("logerr", "")
+
+        except Exception as e:
+            error_msg = f"Errore nell'invio del file: {e}"
+            print(error_msg)
+            dpg.set_value("logerr", error_msg)
+
+            # Aggiorna il log con l'errore
+            with chatlog_lock:
+                chatlog = chatlog + f"\n{timestamp} - {nome_utente_personale}: Errore nell'invio del file {os.path.basename(file_field)}"
+                dpg.set_value("chatlog_field", chatlog)
+
+    elif msg:  # Solo se c'è un messaggio e non un file
+        try:
+            # Invia il messaggio con timestamp
+            formatted_msg = f"{timestamp} - {nome_utente_personale}: {msg}"
+            client_socket.send(formatted_msg.encode("utf-8"))
+
+            with chatlog_lock:
+                chatlog = chatlog + "\n" + formatted_msg
+                dpg.set_value("chatlog_field", chatlog)
+
+            dpg.set_value("input_txt", "")
+
+        except Exception as e:
+            error_msg = f"Errore durante l'invio del messaggio: {str(e)}"
+            print(error_msg)
+            dpg.set_value("logerr", error_msg)
+
+
+def seleziona_cartella_download():
+    #Apre un dialog per selezionare la cartella di download dei file, usando AppleScript per macOS
+    if getattr(seleziona_cartella_download, 'in_progress', False):
+        return
+
+    seleziona_cartella_download.in_progress = True
+    dpg.configure_item("btn_selezione_cartella_download", enabled=False)
+
+    # Crea un file temporaneo per comunicare il risultato
+    temp_file = tempfile.mktemp()
+
+    # Determina il sistema operativo
+    system = platform.system()
+
+    if system == 'Darwin':  # macOS o Sequoia
+        # Usa AppleScript direttamente per un dialogo di selezione cartella nativo
+        # che sarà sempre in primo piano
+        applescript = f'''
+        tell application "System Events"
+            activate
+        end tell
+        set selectedFolder to choose folder with prompt "Seleziona cartella per i file scaricati"
+        set folderPath to POSIX path of selectedFolder
+        do shell script "echo " & quoted form of folderPath & " > {temp_file}"
+        '''
+
+        try:
+            # Esegui AppleScript
+            subprocess.run(["osascript", "-e", applescript], check=False)
+        except Exception as e:
+            print(f"Errore nell'esecuzione di AppleScript: {e}")
+    else:
+        # Per Windows e altri sistemi, usa il metodo Tkinter come prima
+        script_file = tempfile.mktemp(suffix='.py')
+        with open(script_file, 'w') as f:
+            f.write("""
+import tkinter as tk
+from tkinter import filedialog
+import sys
+
+root = tk.Tk()
+root.attributes('-topmost', True)
+root.withdraw()
+folder_path = filedialog.askdirectory(
+    title="Seleziona cartella per i file scaricati"
+)
+
+if folder_path:
+    with open(sys.argv[1], 'w') as f:
+        f.write(folder_path)
+""")
+
+        # Esegui lo script in un processo separato
+        subprocess.run([sys.executable, script_file, temp_file], check=False)
+
+        # Pulisci il file dello script
+        try:
+            if os.path.exists(script_file):
+                os.remove(script_file)
+        except:
+            pass
+
+    try:
+        # Leggi il risultato
+        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+            with open(temp_file, 'r') as f:
+                folder_path = f.read().strip()
+                if folder_path:
+                    # Salva il percorso
+                    dpg.set_value("cartella_download", folder_path)
+                    print(f"Cartella di download impostata: {folder_path}")
+    finally:
+        # Pulisci il file temporaneo
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        except:
+            pass
+
+        dpg.configure_item("btn_selezione_cartella_download", enabled=True)
+        seleziona_cartella_download.in_progress = False
+
+
+def center_items():
+    viewport_width = dpg.get_viewport_width()
+    viewport_height = dpg.get_viewport_height()
+
+    # Calcola dimensioni proporzionali al viewport
+    form_width = int(viewport_width * LOGIN_FORM_WIDTH_RATIO)
+    side_spacer = (viewport_width - form_width) / 2
+
+    # Aumenta la dimensione dei testi
+    dpg.set_value("login_title", "LOGIN")
+    dpg.configure_item("login_title", color=[255, 255, 255])
+
+    # Aggiorna dimensioni degli elementi di login
+    dpg.set_item_width("spaziatore_sinistro", side_spacer)
+    dpg.set_item_width("spaziatore_destro", side_spacer)
+
+    # Ridimensiona i campi di input
+    input_width = form_width - 40  # Un po' più piccolo del form per margini
+    dpg.set_item_width("username", input_width)
+    dpg.configure_item("username", height=INPUT_HEIGHT)
+    dpg.set_item_width("password", input_width)
+    dpg.configure_item("password", height=INPUT_HEIGHT)
+
+    # Ridimensiona pulsanti
+    button_width = (input_width - 20) / 2  # Dividi lo spazio disponibile per i due pulsanti con un piccolo gap
+    dpg.set_item_width("login_button", button_width)
+    dpg.configure_item("login_button", height=BUTTON_HEIGHT)
+    dpg.set_item_width("register_button", button_width)
+    dpg.configure_item("register_button", height=BUTTON_HEIGHT)
+
+    # Aggiorna i componenti della chat
+    chat_width = viewport_width - (SPACING * 2)  # Margine ai lati
+    file_width = viewport_width - (SPACING * 2)  # Margine ai lati
+    download_width = viewport_width - (SPACING * 2)  # Margine ai lati
+    chat_height = viewport_height - 250  # Spazio per input e altri elementi
+
+    dpg.set_item_width("chatlog_field", chat_width)
+    dpg.set_item_height("chatlog_field", chat_height)
+
+    # Aggiorna l'input di testo della chat
+    input_chat_width = chat_width - 120  # Spazio per il pulsante Invia
+    dpg.set_item_width("input_txt", input_chat_width)
+    dpg.configure_item("input_txt", height=INPUT_HEIGHT)
+
+    # Aggiorna dimensione pulsante invio
+    dpg.set_item_width("send_button", 100)
+    dpg.configure_item("send_button", height=INPUT_HEIGHT)
+
+    # Aggiorna l'input di testo della file select
+    input_file_width = file_width - 120  # Spazio per il pulsante file
+    dpg.set_item_width("file_field", input_file_width)
+    dpg.configure_item("file_field", height=INPUT_HEIGHT)
+
+    # Aggiorna dimensione pulsante file
+    dpg.set_item_width("file_button", 100)
+    dpg.configure_item("file_button", height=INPUT_HEIGHT)
+
+    # Aggiorna l'input della cartella di download
+    input_download_width = download_width - 180  # Spazio per il pulsante
+    dpg.set_item_width("cartella_download", input_download_width)
+    dpg.configure_item("cartella_download", height=INPUT_HEIGHT)
+
+    # Aggiorna dimensione pulsante cartella
+    dpg.set_item_width("btn_selezione_cartella_download", 160)
+    dpg.configure_item("btn_selezione_cartella_download", height=INPUT_HEIGHT)
+
+    if dpg.does_item_exist("pannello_contatti"):
+        # Imposta dimensioni per il pannello dei contatti
+        contacts_width = 250
+        dpg.set_item_width("pannello_contatti", contacts_width)
+
+        # Imposta dimensioni per il pannello di chat attiva
+        chat_panel_width = viewport_width - contacts_width - 25  # Margine
+        dpg.set_item_width("chat_attiva", chat_panel_width)
+
+        # Configura altri elementi nella chat privata
+        if dpg.does_item_exist("private_chatlog_field"):
+            dpg.set_item_width("chatlog_field_privata", chat_panel_width - 20)
+            chat_height = viewport_height - 200  # Spazio per input e header
+            dpg.set_item_height("chatlog_field_privata", chat_height)
+
+        # Input text e pulsante
+        if dpg.does_item_exist("input_txt_chat_privata"):
+            input_width = chat_panel_width - 120  # Spazio per pulsante
+            dpg.set_item_width("input_txt_chat_privata", input_width)
+            dpg.configure_item("input_txt_chat_privata", height=INPUT_HEIGHT)
+
+        # File field e pulsante
+        if dpg.does_item_exist("file_field_privata"):
+            dpg.set_item_width("file_field_privata", input_width)
+            dpg.configure_item("file_field_privata", height=INPUT_HEIGHT)
+
+
+def carica_file():
+    """Apre un dialog per selezionare un file da inviare, usando AppleScript per macOS"""
+    if getattr(carica_file, 'in_progress', False):
+        return
+
+    carica_file.in_progress = True
+    dpg.configure_item("file_button", enabled=False)
+
+    # Crea un file temporaneo per comunicare il risultato
+    temp_file = tempfile.mktemp()
+
+    # Determina il sistema operativo
+    system = platform.system()
+
+    if system == 'Darwin':  # macOS
+        # Usa AppleScript direttamente per un dialogo di selezione file nativo
+        # che sarà sempre in primo piano
+        applescript = f'''
+        tell application "System Events"
+            activate
+        end tell
+        set selectedFile to choose file with prompt "Seleziona un file da inviare"
+        set filePath to POSIX path of selectedFile
+        do shell script "echo " & quoted form of filePath & " > {temp_file}"
+        '''
+
+        try:
+            # Esegui AppleScript
+            subprocess.run(["osascript", "-e", applescript], check=False)
+        except Exception as e:
+            print(f"Errore nell'esecuzione di AppleScript: {e}")
+    else:
+        # Per Windows e altri sistemi, usa il metodo Tkinter come prima
+        script_file = tempfile.mktemp(suffix='.py')
+        with open(script_file, 'w') as f:
+            f.write("""
+import tkinter as tk
+from tkinter import filedialog
+import sys
+
+root = tk.Tk()
+root.attributes('-topmost', True)
+root.withdraw()
+file_path = filedialog.askopenfilename(
+    title="Seleziona un file da inviare",
+    filetypes=[("Tutti i file", "*"), ("File di testo", "*.txt")]
+)
+
+if file_path:
+    with open(sys.argv[1], 'w') as f:
+        f.write(file_path)
+""")
+
+        # Esegui lo script in un processo separato
+        subprocess.run([sys.executable, script_file, temp_file], check=False)
+
+        # Pulisci il file dello script
+        try:
+            if os.path.exists(script_file):
+                os.remove(script_file)
+        except:
+            pass
+
+    try:
+        # Leggi il risultato
+        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+            with open(temp_file, 'r') as f:
+                file_path = f.read().strip()
+                if file_path:
+                    dpg.set_value("file_field", file_path)
+                    print(f"File selezionato: {file_path}")
+    finally:
+        # Pulisci il file temporaneo
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        except:
+            pass
+
+        dpg.configure_item("file_button", enabled=True)
+        carica_file.in_progress = False
+
+
+def create_gui():
+    with dpg.window(label="Chat", tag="window"):
+        with dpg.tab_bar(tag="tab_bar"):
+            # Tab Login
+            with dpg.tab(label="Login", tag="login"):
+                with dpg.group(horizontal=True):
+                    dpg.add_spacer(tag="spaziatore_sinistro", width=300)  # Spaziatore a sinistra
+
+                    with dpg.group():  # Gruppo verticale per gli elementi di login
+                        dpg.add_spacer(height=SPACING * 13)  # Spaziatore in alto
+                        dpg.add_text("LOGIN", tag="login_title", color=[255, 255, 255])
+                        dpg.add_spacer(height=SPACING)
+                        dpg.add_input_text(label="Username", tag="username")
+                        dpg.add_spacer(height=SPACING)
+                        dpg.add_input_text(label="Password", tag="password", password=True)
+                        dpg.add_spacer(height=SPACING * 2)
+
+                        # Gruppo orizzontale per i pulsanti, centrato
+                        with dpg.group(horizontal=True):
+                            dpg.add_button(label="Login", tag="login_button", callback=login)
+                            dpg.add_spacer(width=SPACING)
+                            dpg.add_button(label="Register", tag="register_button", callback=registrati)
+
+                        dpg.add_spacer(height=SPACING)
+                        dpg.add_text("", tag="logerr", color=(255, 0, 0))  # Colore rosso per errori
+                        dpg.add_spacer(height=SPACING * 2)  # Spaziatore in basso
+
+                    dpg.add_spacer(tag="spaziatore_destro", width=300)  # Spaziatore a destra
+
+            # Tab Chat
+            with dpg.tab(label="chat_globale", tag="chat", show=False):
+                dpg.add_spacer(height=5)
+                dpg.add_text("CHAT GLOBALE", tag="chat_title", color=[255, 255, 255])
+                dpg.add_input_text(
+                    tag="chatlog_field", multiline=True, readonly=True, tracked=True,
+                    track_offset=1)
+                dpg.add_spacer(height=SPACING)
+
+                # Gruppo per il messaggio di testo
+                with dpg.group(horizontal=True):
+                    dpg.add_input_text(tag="input_txt", multiline=True)
+                    dpg.add_spacer(width=SPACING)  # Spaziatore a destra
+                    dpg.add_button(label="Invia", tag="send_button", callback=invia)
+
+                dpg.add_spacer(height=5)
+
+                # Gruppo per la selezione del file
+                with dpg.group(horizontal=True):
+                    dpg.add_input_text(tag="file_field", multiline=True, readonly=True)
+                    dpg.add_spacer(width=SPACING)  # Spaziatore a destra
+                    dpg.add_button(label="File", tag="file_button", callback=carica_file)
+
+                dpg.add_spacer(height=5)
+
+                # Gruppo per la cartella di download
+                with dpg.group(horizontal=True):
+                    dpg.add_input_text(tag="cartella_download", multiline=True, readonly=True,
+                                       default_value=os.path.join(os.path.expanduser("~"), "Downloads"))
+                    dpg.add_spacer(width=SPACING)
+                    dpg.add_button(label="Set Download Folder", tag="btn_selezione_cartella_download",
+                                   callback=seleziona_cartella_download)
+
+            with dpg.tab(label="Chat private", tag="chat_private", show=False):
+                dpg.add_spacer(height=5)
+                with dpg.group(horizontal=True):
+                    # finestra a sinistra con la lista dei contatti
+                    with dpg.child_window(tag="pannello_contatti", width=250, border=True):
+                        dpg.add_text("Contatti", color=[255, 255, 255])
+                        dpg.add_separator()
+
+                        # finestra con la lista dei contatti
+                        with dpg.child_window(tag="lista_contatti", height=-35, border=False):
+                            # I contatti saranno aggiunti in runtime nella lista (col pulsante apposito)
+                            pass
+
+                        # Pulsante per aggiungere nuovi contatti
+                        dpg.add_button(label="Aggiungi contatto", tag="btn_aggiungi_contatto",
+                                       callback=mostra_aggiungi_contatti, width=-1)
+
+                    # finestra a destra con la chat selezionata da visualizzare
+                    with dpg.child_window(tag="chat_attiva", width=-1, border=True):
+                        # titolo/nome della chat
+                        with dpg.group(horizontal=True, tag="Nome_chat"):
+                            dpg.add_text("Seleziona una chat", tag="titolo_chat_attiva")
+                            dpg.add_spacer(width=355)
+                            dpg.add_button(label="Chiama", tag="btn_chiama_privato", callback=lambda:chiama_privato(True), width=70)
+                            dpg.add_button(label="Videochiama", tag="btn_videochiama_privato", callback=lambda:videochiama_privato(True), width=90)
+
+                        dpg.add_separator()
+
+                        # Chat log privata
+                        dpg.add_input_text(tag="chatlog_field_privata", multiline=True,
+                                           readonly=True, height=-70, width=-1)
+
+                        # Area di input
+                        with dpg.group(horizontal=True):
+                            dpg.add_input_text(tag="input_txt_chat_privata", multiline=False, width=-100)
+                            dpg.add_button(label="Invia", tag="btn_invia_messaggio_privato",
+                                           callback=invia_messaggio_privato, width=80)
+
+                        with dpg.group(horizontal=True):
+                            dpg.add_input_text(tag="file_field_privata", multiline=False, readonly=True, width=-120)
+                            dpg.add_button(label="File", tag="btn_file_chat_privata", callback=select_private_file,
+                                           width=100)
+
+
+def chiama_privato(is_you_calling):
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+
+    try:
+        if is_you_calling:
+            dpg.configure_item("btn_chiama_privato", enabled=False)
+            dpg.configure_item("btn_videochiama_privato", enabled=False)
+            utente_da_chiamare = username_client_chat_corrente
+            utente_in_chiamata = utente_da_chiamare  # Salva il nome utente
+
+            # Verifica che ci sia un utente selezionato
+            if not utente_da_chiamare:
+                print("Errore: nessun contatto selezionato per la chiamata")
+                dpg.configure_item("btn_chiama_privato", enabled=True)
+                dpg.configure_item("btn_videochiama_privato", enabled=True)
+                return
+
+            # Invia richiesta IP al server con debug
+            is_video = False
+            comando = debug_richiesta_ip(utente_da_chiamare, is_video)
+            print(f"Richiedo IP per chiamare {utente_da_chiamare}")
+            client_socket.send(comando.encode('utf-8'))
+
+    except Exception as e:
+        print(f"Errore nella richiesta di chiamata: {e}")
+        dpg.configure_item("btn_chiama_privato", enabled=True)
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+
+
+def videochiama_privato(is_you_calling):  # se sei tu a chiamare allora t aspetti una risposta
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+    try:
+        if is_you_calling:
+            dpg.configure_item("btn_chiama_privato", enabled=False)
+            dpg.configure_item("btn_videochiama_privato", enabled=False)
+            utente_da_chiamare = username_client_chat_corrente
+            utente_in_chiamata = utente_da_chiamare  # Salva il nome utente
+
+            # Verifica che ci sia un utente selezionato
+            if not utente_da_chiamare:
+                print("Errore: nessun contatto selezionato per la videochiamata")
+                dpg.configure_item("btn_chiama_privato", enabled=True)
+                dpg.configure_item("btn_videochiama_privato", enabled=True)
+
+            is_video = True
+            comando = debug_richiesta_ip(utente_da_chiamare, is_video)
+            print(f"Richiedo IP per videochiamare {utente_da_chiamare}")
+            client_socket.send(comando.encode('utf-8'))
+    except Exception as e:
+        print(f"Errore nella richiesta di videochiamata: {e}")
+        dpg.configure_item("btn_chiama_privato", enabled=True)
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+
+
+def mostra_finestra_chiamata(risposta):
+    """
+    Mostra la finestra di chiamata in base alla risposta ricevuta.
+    Versione ottimizzata per compatibilità con Mac e problemi AGX.
+
+    Risposte possibili:
+    - "ACCEPTED": Chiamata accettata, mostra finestra completa
+    - "REFUSED": Chiamata rifiutata
+    - "UNREACHABLE", "TIMEOUT", "ERROR": Problemi di connessione
+    """
+    global utente_in_chiamata, is_video
+
+    # Debug per verificare che la funzione venga chiamata
+    print(f"mostra_finestra_chiamata chiamata con risposta: {risposta}, utente: {utente_in_chiamata}")
+
+    # Pulizia preventiva di qualsiasi finestra o risorsa esistente
+    try:
+        # Se esiste già una finestra di chiamata, eliminiamola prima
+        if dpg.does_item_exist("finestra_chiamata"):
+            dpg.delete_item("finestra_chiamata")
+            print("Finestra chiamata precedente eliminata")
+
+        # Se esiste già un registro texture, eliminiamolo con cautela
+        if dpg.does_item_exist("registro_chiamata"):
+            dpg.delete_item("registro_chiamata")
+            print("Registro texture precedente eliminato")
+            # Su Mac, a volte serve un piccolo ritardo dopo la rimozione di texture
+            time.sleep(0.1)
+    except Exception as e:
+        print(f"Errore durante la pulizia delle risorse: {e}")
+
+    # Calcola dimensioni in base al testo e alla viewport
+    viewport_width = dpg.get_viewport_width()
+    viewport_height = dpg.get_viewport_height()
+
+    # Per gli stati di errore, mostriamo solo un messaggio semplice
+    if risposta in ["UNREACHABLE", "TIMEOUT", "ERROR", "REFUSED"]:
+        window_width = 300
+        window_height = 150
+        window_pos = [viewport_width // 2 - window_width // 2, viewport_height // 2 - window_height // 2]
+
+        # Costruisci il messaggio in base alla risposta
+        if risposta == "UNREACHABLE":
+            title = "Utente non raggiungibile"
+            message = f"Impossibile raggiungere {utente_in_chiamata}."
+            details = "L'utente potrebbe essere offline o non disponibile."
+        elif risposta == "TIMEOUT":
+            title = "Timeout connessione"
+            message = f"Timeout della connessione con {utente_in_chiamata}."
+            details = "La rete potrebbe essere instabile."
+        elif risposta == "ERROR":
+            title = "Errore chiamata"
+            message = f"Errore durante la chiamata a {utente_in_chiamata}."
+            details = "Si è verificato un problema imprevisto."
+        elif risposta == "REFUSED":
+            title = "Chiamata rifiutata"
+            message = f"Chiamata rifiutata da {utente_in_chiamata}."
+            details = "L'utente ha rifiutato la chiamata."
+
+        # Crea la finestra di errore
+        try:
+            with dpg.window(label=title, tag="finestra_chiamata",
+                            modal=True, width=window_width, height=window_height,
+                            pos=window_pos, no_resize=True, no_close=True):
+                dpg.add_spacer(height=10)
+                dpg.add_text(message, color=[255, 100, 100])
+                dpg.add_text(details, wrap=280)
+                dpg.add_spacer(height=20)
+
+                # Centra il pulsante
+                button_width = 100
+                with dpg.group(horizontal=True):
+                    dpg.add_spacer(width=(window_width - button_width) // 2)
+                    dpg.add_button(label="OK", width=button_width,
+                                   callback=lambda: dpg.delete_item("finestra_chiamata"))
+
+            print(f"Finestra di errore creata: {title}")
+        except Exception as e:
+            print(f"Errore nella creazione della finestra di errore: {e}")
+
+        # Riabilitiamo i pulsanti di chiamata
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+        dpg.configure_item("btn_chiama_privato", enabled=True)
+        return
+
+    # Per chiamate accettate, mostra la finestra completa
+    try:
+        # Configura la dimensione della finestra
+        call_window_width = 400
+        call_window_height = 500 if is_video else 200  # Altezza ridotta se non è una videochiamata
+        call_window_pos = [viewport_width // 2 - call_window_width // 2,
+                           viewport_height // 2 - call_window_height // 2]
+
+        # Crea la texture registry prima della finestra
+        if is_video:
+            # Crea il registro texture per i video
+            try:
+                with dpg.texture_registry(tag="registro_chiamata"):
+                    # Texture per il video del mittente (tu) - con dimensioni compatibili AGX
+                    width, height = 320, 240
+                    width = width - (width % 4)  # Assicura multiplo di 4
+
+                    # Crea texture con allineamento corretto
+                    dpg.add_raw_texture(
+                        width=width, height=height,
+                        default_value=np.zeros(width * height * 3, dtype=np.float32),
+                        format=dpg.mvFormat_Float_rgb,
+                        tag="texture_mittente"
+                    )
+
+                    # Texture per il video del destinatario
+                    dpg.add_raw_texture(
+                        width=width, height=height,
+                        default_value=np.zeros(width * height * 3, dtype=np.float32),
+                        format=dpg.mvFormat_Float_rgb,
+                        tag="texture_destinatario"
+                    )
+                print("Registro texture creato con successo")
+            except Exception as e:
+                print(f"Errore nella creazione del registro texture: {e}")
+                is_video = False  # Disattiva il video in caso di problemi
+
+        # Crea la finestra principale dopo la texture registry
+        with dpg.window(label=f"Chiamata con {utente_in_chiamata}", tag="finestra_chiamata",
+                        modal=True, width=call_window_width, height=call_window_height,
+                        pos=call_window_pos, no_resize=True, no_close=True):
+
+            # Collega le immagini alle texture se è una videochiamata
+            if is_video and dpg.does_item_exist("registro_chiamata"):
+                try:
+                    # Immagini video
+                    dpg.add_text("Il mio video:", color=[220, 220, 220])
+                    dpg.add_image(texture_tag="texture_mittente", tag="video_mittente",
+                                  width=width, height=height)
+
+                    dpg.add_separator()
+                    dpg.add_spacer(height=5)
+
+                    dpg.add_text(f"Video di {utente_in_chiamata}:", color=[220, 220, 220])
+                    dpg.add_image(texture_tag="texture_destinatario", tag="video_destinatario",
+                                  width=width, height=height)
+                except Exception as e:
+                    print(f"Errore nell'aggiunta delle immagini video: {e}")
+
+            # Aggiungi informazioni sulla chiamata
+            dpg.add_spacer(height=10)
+            dpg.add_text(f"In chiamata con: {utente_in_chiamata}", color=[255, 255, 255])
+            dpg.add_text("Stato: Connesso", color=[100, 255, 100])
+            dpg.add_separator()
+
+            # Controlli della chiamata - centrati
+            button_width = 120
+            spacing = 10
+
+            # Calcola larghezza totale dei pulsanti
+            if is_video:
+                total_buttons = 3  # Termina, Video, Audio
+                total_buttons_width = total_buttons * button_width + (total_buttons - 1) * spacing
+            else:
+                total_buttons = 2  # Termina, Audio
+                total_buttons_width = total_buttons * button_width + (total_buttons - 1) * spacing
+
+            left_margin = (call_window_width - total_buttons_width) // 2
+
+            dpg.add_spacer(height=15)
+
+            # Layout a griglia centrato per i pulsanti
+            with dpg.group(horizontal=True):
+                # Margine sinistro
+                dpg.add_spacer(width=left_margin)
+
+                # Pulsante Termina (rosso)
+                with dpg.theme() as termina_theme:
+                    with dpg.theme_component(dpg.mvButton):
+                        dpg.add_theme_color(dpg.mvThemeCol_Button, [150, 40, 40])  # Rosso normale
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [180, 60, 60])  # Rosso hover
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [120, 30, 30])  # Rosso cliccato
+                        dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Bianco
+
+                dpg.add_button(label="Termina", tag="btn_termina_chiamata", width=button_width,
+                               callback=termina_chiamata)
+                dpg.bind_item_theme(dpg.last_item(), termina_theme)
+
+                # Spaziatore tra i pulsanti
+                dpg.add_spacer(width=spacing)
+
+                # Pulsante Video (blu) - solo per videochiamate
+                if is_video:
+                    with dpg.theme() as video_theme:
+                        with dpg.theme_component(dpg.mvButton):
+                            dpg.add_theme_color(dpg.mvThemeCol_Button, [40, 80, 150])  # Blu normale
+                            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [60, 100, 180])  # Blu hover
+                            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [30, 60, 120])  # Blu cliccato
+                            dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Bianco
+
+                    video_label = "Disattiva Video" if is_video_on else "Attiva Video"
+                    dpg.add_button(label=video_label, tag="btn_video", width=button_width,
+                                   callback=attiva_disattiva_video)
+                    dpg.bind_item_theme(dpg.last_item(), video_theme)
+
+                    # Spaziatore tra i pulsanti
+                    dpg.add_spacer(width=spacing)
+
+                # Pulsante Audio (verde)
+                with dpg.theme() as audio_theme:
+                    with dpg.theme_component(dpg.mvButton):
+                        dpg.add_theme_color(dpg.mvThemeCol_Button, [46, 120, 50])  # Verde normale
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [66, 150, 70])  # Verde hover
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [36, 100, 40])  # Verde cliccato
+                        dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Bianco
+
+                audio_label = "Disattiva Audio" if is_audio_on else "Attiva Audio"
+                dpg.add_button(label=audio_label, tag="btn_audio", width=button_width,
+                               callback=attiva_disattiva_audio)
+                dpg.bind_item_theme(dpg.last_item(), audio_theme)
+
+            # Informazioni tecniche per il debug
+            dpg.add_spacer(height=10)
+            with dpg.collapsing_header(label="Informazioni di Debug", default_open=False):
+                dpg.add_text(f"Tipo: {'Video' if is_video else 'Audio'}")
+                dpg.add_text(f"Audio: {'Attivo' if is_audio_on else 'Disattivato'}")
+                if is_video:
+                    dpg.add_text(f"Video: {'Attivo' if is_video_on else 'Disattivato'}")
+                dpg.add_text(f"IP: {socket_chiamata.getpeername()[0] if socket_chiamata else 'N/A'}")
+
+        print(f"Finestra di chiamata creata per {utente_in_chiamata}, tipo: {risposta}")
+
+    except Exception as e:
+        print(f"Errore nella creazione della finestra di chiamata: {e}")
+        # Log dettagliato per debug
+        import traceback
+        traceback.print_exc()
+
+        # In caso di errore, riabilitiamo comunque i pulsanti
+        try:
+            dpg.configure_item("btn_videochiama_privato", enabled=True)
+            dpg.configure_item("btn_chiama_privato", enabled=True)
+        except:
+            pass
+
+def attiva_disattiva_video():
+    global is_video_on
+    if is_video_on:
+        is_video_on = False
+    else:
+        is_video_on = True
+
+def attiva_disattiva_audio():
+    global is_audio_on
+    if is_audio_on:
+        is_audio_on = False
+    else:
+        is_audio_on = True
+
+
+def aggiorna_video_remoto(frame_remoto):
+    """
+    Aggiorna la texture del video remoto in modo sicuro, gestendo le particolarità
+    delle GPU Apple (AGX).
+    """
+    if not dpg.does_item_exist("texture_destinatario") or frame_remoto is None:
+        return
+
+    try:
+        # Converti e formatta il frame
+        frame_rgb = cv2.cvtColor(frame_remoto, cv2.COLOR_BGR2RGB)
+
+        # Ridimensiona con dimensioni che rispettano l'allineamento per evitare problemi AGX
+        # Assicurati che width sia un multiplo di 4 per evitare problemi di padding
+        width, height = 320, 240
+        width = width - (width % 4)  # Arrotonda a multiplo di 4
+
+        frame_resized = cv2.resize(frame_rgb, (width, height))
+
+        # Usa formato float con padding corretto
+        frame_float = frame_resized.astype(np.float32) / 255.0
+
+        # Gestione sicura dell'aggiornamento della texture
+        try:
+            # Aggiorna la texture
+            dpg.set_value("texture_destinatario", frame_float.ravel())
+        except Exception as e:
+            print(f"Errore nell'aggiornamento della texture remota: {e}")
+
+    except Exception as e:
+        print(f"Errore nella preparazione del frame remoto: {e}")
+
+
+def aggiorna_video_locale(frame):
+    """
+    Aggiorna la texture del video locale in modo sicuro, gestendo le particolarità
+    delle GPU Apple (AGX).
+    """
+    if not dpg.does_item_exist("texture_mittente") or frame is None:
+        return
+
+    try:
+        # Converti e formatta il frame
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Ridimensiona con dimensioni che rispettano l'allineamento per evitare problemi AGX
+        # Assicurati che width sia un multiplo di 4 per evitare problemi di padding
+        width, height = 320, 240
+        width = width - (width % 4)  # Arrotonda a multiplo di 4
+
+        frame_resized = cv2.resize(frame_rgb, (width, height))
+
+        # Usa formato float con padding corretto
+        frame_float = frame_resized.astype(np.float32) / 255.0
+
+        # Gestione sicura dell'aggiornamento della texture
+        try:
+            # Aggiorna la texture
+            dpg.set_value("texture_mittente", frame_float.ravel())
+        except Exception as e:
+            print(f"Errore nell'aggiornamento della texture locale: {e}")
+
+    except Exception as e:
+        print(f"Errore nella preparazione del frame locale: {e}")
+
+
+def gestisci_video():
+    """
+    Gestisce l'invio e la ricezione di video durante una videochiamata.
+    Ottimizzato per prestazioni e compatibilità con GPU Apple.
+    """
+    global is_video, is_video_on, socket_chiamata, VideoCapture
+
+    if VideoCapture is None:
+        print("Errore: VideoCapture non inizializzato")
+        return
+
+    print("Avvio thread gestione video")
+
+    try:
+        # Ottimizzazione frequenza fotogrammi
+        fps = 20  # Un valore più basso riduce il carico di rete e CPU
+        frame_interval = 1.0 / fps
+        last_frame_time = 0
+
+        while is_video_on and socket_chiamata and chiamata_in_corso:
+            current_time = time.time()
+
+            # Limita la frequenza dei fotogrammi
+            if current_time - last_frame_time < frame_interval:
+                time.sleep(0.005)  # Breve pausa per ridurre l'uso della CPU
+                continue
+
+            last_frame_time = current_time
+
+            # Cattura frame dalla webcam
+            ret, frame = VideoCapture.read()
+            if not ret:
+                time.sleep(0.1)  # Pausa per il prossimo tentativo
+                continue
+
+            # Aggiorna il video locale
+            try:
+                aggiorna_video_locale(frame)
+            except Exception as e:
+                print(f"Errore nell'aggiornamento del video locale: {e}")
+
+            # Compressione e invio del frame solo se la connessione è attiva
+            try:
+                if socket_chiamata:
+                    # Ridimensiona e comprimi il frame
+                    frame_small = cv2.resize(frame, (320, 240))
+                    # Usa una qualità inferiore per ridurre la dimensione dei dati
+                    _, encoded_frame = cv2.imencode('.jpg', frame_small, [cv2.IMWRITE_JPEG_QUALITY, 35])
+                    data = encoded_frame.tobytes()
+
+                    # Invia dimensione e dati del frame
+                    size = len(data)
+                    # Usa struttura a pacchetto per l'invio
+                    packet = struct.pack('!I', size) + data
+                    socket_chiamata.send(packet)
+            except Exception as e:
+                print(f"Errore nell'invio video: {e}")
+                continue  # Continua a provare per il prossimo frame
+
+            # Ricezione frame video
+            try:
+                # Timeout breve per non bloccare
+                socket_chiamata.settimeout(0.1)
+
+                # Leggi l'header con la dimensione
+                size_data = socket_chiamata.recv(4)
+                if size_data and len(size_data) == 4:
+                    size = struct.unpack('!I', size_data)[0]
+
+                    # Controlla dimensioni ragionevoli per evitare errori
+                    if size > 0 and size < 1000000:  # Max 1MB per frame
+                        # Leggi il frame a blocchi
+                        frame_data = b''
+                        bytes_remaining = size
+
+                        while bytes_remaining > 0:
+                            chunk_size = min(bytes_remaining, 4096)
+                            chunk = socket_chiamata.recv(chunk_size)
+
+                            if not chunk:  # Connessione interrotta
+                                break
+
+                            frame_data += chunk
+                            bytes_remaining -= len(chunk)
+
+                        # Verifica che tutti i dati siano stati ricevuti
+                        if len(frame_data) == size:
+                            # Decodifica e mostra il frame
+                            try:
+                                frame_remoto = cv2.imdecode(
+                                    np.frombuffer(frame_data, dtype=np.uint8),
+                                    cv2.IMREAD_COLOR
+                                )
+                                if frame_remoto is not None:
+                                    aggiorna_video_remoto(frame_remoto)
+                            except Exception as e:
+                                print(f"Errore nella decodifica del video: {e}")
+            except socket.timeout:
+                # Normale in comunicazione non bloccante
+                pass
+            except Exception as e:
+                print(f"Errore nella ricezione video: {e}")
+
+            # Pausa breve per ridurre l'uso della CPU
+            time.sleep(0.01)
+
+    except Exception as e:
+        print(f"Errore critico nel thread video: {e}")
+    finally:
+        print("Thread video terminato")
+
+
+def gestisci_audio():
+    """
+    Funzione che gestisce lo streaming audio durante una chiamata.
+    Include la soppressione del feedback audio.
+    """
+    global chiamata_in_corso, socket_chiamata, audioStream, is_audio_on
+
+    print("Avvio thread gestione audio")
+
+    # Verifica che lo stream audio sia inizializzato
+    if audioStream is None:
+        print("Errore: audioStream non inizializzato")
+        return
+
+    try:
+        # Imposta buffer per invio e ricezione
+        buffer_size = CHUNK
+        receive_buffer_size = CHUNK * 4  # Buffer più grande per la ricezione
+
+        # Soglia per la soppressione del feedback
+        threshold = 0.1  # Valore da adattare in base alle tue esigenze
+        last_audio_sent = None
+
+        # Loop principale
+        while chiamata_in_corso and socket_chiamata:
+            # Invio audio
+            try:
+                if is_audio_on:
+                    # Leggi dati audio dal microfono
+                    audio_data = audioStream.read(buffer_size, exception_on_overflow=False)
+
+                    # Conversione per elaborazione
+                    audio_array = np.frombuffer(audio_data, dtype=np.int16)
+
+                    # Normalizza per confronto (trasforma in intervallo -1 a 1)
+                    audio_normalized = audio_array.astype(np.float32) / 32768.0
+
+                    # Calcola la potenza del segnale audio
+                    audio_power = np.mean(np.abs(audio_normalized))
+
+                    # Invia i dati audio solo se abbastanza forti
+                    if audio_power > threshold:
+                        # Solo se non è un feedback (confronto con segnale precedente)
+                        if last_audio_sent is None or not is_similar_audio(audio_array, last_audio_sent):
+                            socket_chiamata.send(audio_data)
+                            last_audio_sent = audio_array.copy()
+                    else:
+                        # Assicurati di avere un valore di confronto anche nei momenti di silenzio
+                        last_audio_sent = audio_array.copy()
+
+                # Ricezione audio
+                try:
+                    # Imposta un timeout breve per la ricezione
+                    socket_chiamata.settimeout(0.1)
+
+                    # Ricevi dati audio
+                    audio_ricevuto = socket_chiamata.recv(receive_buffer_size)
+
+                    # Riproduci i dati audio se ci sono
+                    if audio_ricevuto and len(audio_ricevuto) > 0:
+                        audioStream.write(audio_ricevuto)
+
+                except socket.timeout:
+                    # Timeout normale, continua il loop
+                    pass
+                except Exception as e:
+                    print(f"Errore nella ricezione audio: {e}")
+                    # Controlla se la connessione è interrotta
+                    if "Connessione in corso interrotta" in str(e):
+                        termina_chiamata()
+                        chiamata_in_corso = False
+                    # Non interrompere il loop per errori minori
+
+            except Exception as e:
+                print(f"Errore nell'invio audio: {e}")
+                # Piccola pausa per evitare un ciclo troppo rapido in caso di errore
+                time.sleep(0.01)
+
+            # Pausa breve per ridurre l'utilizzo della CPU
+            time.sleep(0.001)
+
+    except Exception as e:
+        print(f"Errore critico nella gestione audio: {e}")
+    finally:
+        print("Thread audio terminato")
+
+
+def is_similar_audio(array1, array2, threshold=0.8):
+    """
+    Confronta due array audio per determinare se sono simili (potenziale feedback).
+    Restituisce True se la correlazione supera la soglia.
+    """
+    if array1 is None or array2 is None or len(array1) != len(array2):
+        return False
+
+    # Calcola la correlazione normalizzata
+    try:
+        # Converti in float per calcolo preciso
+        a1 = array1.astype(np.float32)
+        a2 = array2.astype(np.float32)
+
+        # Normalizza
+        a1 = (a1 - np.mean(a1)) / (np.std(a1) + 1e-8)  # Evita divisione per zero
+        a2 = (a2 - np.mean(a2)) / (np.std(a2) + 1e-8)
+
+        # Calcola la correlazione
+        correlation = np.sum(a1 * a2) / len(a1)
+
+        return abs(correlation) > threshold
+    except:
+        return False
+
+def verifica_connettivita(ip, porta, timeout=2):
+    """
+    Verifica se è possibile stabilire una connessione TCP all'indirizzo e porta specificati.
+    Restituisce True se la connessione è possibile, False altrimenti.
+    """
+    try:
+        # Crea un socket temporaneo
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+
+        # Tenta la connessione
+        result = sock.connect_ex((ip, porta))
+
+        # Chiudi subito il socket
+        sock.close()
+
+        # Se result è 0, la connessione è riuscita
+        return result == 0
+
+    except Exception as e:
+        print(f"Errore nel test di connettività: {e}")
+        return False
+
+def termina_chiamata():
+    """
+    Termina la chiamata attiva, rilascia le risorse e ripristina l'interfaccia.
+    Chiude correttamente tutte le risorse (socket, audio, video).
+    """
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+
+    print("Avvio terminazione chiamata...")
+
+    # Prima di tutto, imposta lo stato come non in chiamata
+    chiamata_in_corso = False
+
+    # Invia segnale di fine chiamata se possibile
+    if socket_chiamata:
+        try:
+            socket_chiamata.send("ENDCALL".encode('utf-8'))
+            print("Inviato segnale ENDCALL al peer")
+        except:
+            print("Impossibile inviare segnale di fine chiamata")
+
+        # Chiudi il socket
+        try:
+            socket_chiamata.close()
+            print("Socket di chiamata chiuso")
+        except:
+            print("Errore nella chiusura del socket")
+
+        socket_chiamata = None
+
+    # Rilascia risorse audio
+    if audioStream:
+        try:
+            audioStream.stop_stream()
+            audioStream.close()
+            print("Stream audio chiuso")
+        except Exception as e:
+            print(f"Errore nella chiusura dello stream audio: {e}")
+
+        audioStream = None
+
+    # Rilascia istanza PyAudio
+    if p:
+        try:
+            p.terminate()
+            print("Istanza PyAudio terminata")
+        except Exception as e:
+            print(f"Errore nella terminazione di PyAudio: {e}")
+
+        p = None
+
+    # Rilascia la camera
+    if VideoCapture:
+        try:
+            VideoCapture.release()
+            print("Webcam rilasciata")
+        except Exception as e:
+            print(f"Errore nel rilascio della webcam: {e}")
+
+        VideoCapture = None
+
+    # Ripristina le variabili di stato
+    is_video = False
+    utente_in_chiamata = ""
+
+    # Chiudi finestra di chiamata se esiste
+    try:
+        if dpg.does_item_exist("finestra_chiamata"):
+            dpg.delete_item("finestra_chiamata")
+            print("Finestra di chiamata chiusa")
+    except Exception as e:
+        print(f"Errore nella chiusura della finestra di chiamata: {e}")
+
+    # Chiudi registro texture se esiste
+    try:
+        if dpg.does_item_exist("registro_chiamata"):
+            dpg.delete_item("registro_chiamata")
+            print("Registro texture chiuso")
+    except Exception as e:
+        print(f"Errore nella chiusura del registro texture: {e}")
+
+    print("Chiamata terminata con successo")
+
+    # Riabilita i pulsanti di chiamata
+    try:
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+        dpg.configure_item("btn_chiama_privato", enabled=True)
+    except Exception as e:
+        print(f"Errore nella riattivazione dei pulsanti: {e}")
+
+def select_private_file():
+    #Apre un dialog per selezionare un file da inviare in chat privata
+    if not username_client_chat_corrente:
+        dpg.set_value("logerr", "Seleziona prima un contatto")
+        return
+
+    if getattr(select_private_file, 'in_progress', False):
+        return
+
+    select_private_file.in_progress = True
+    dpg.configure_item("btn_file_chat_privata", enabled=False)
+
+    # Usa la stessa logica di selezione file che hai già implementato
+    temp_file = tempfile.mktemp()
+    system = platform.system()
+
+    if system == 'Darwin':  # macOS
+        # Usa AppleScript direttamente per un dialogo di selezione file nativo
+        # che sarà sempre in primo piano
+        applescript = f'''
+            tell application "System Events"
+                activate
+            end tell
+            set selectedFile to choose file with prompt "Seleziona un file da inviare"
+            set filePath to POSIX path of selectedFile
+            do shell script "echo " & quoted form of filePath & " > {temp_file}"
+            '''
+
+        try:
+            # Esegui AppleScript
+            subprocess.run(["osascript", "-e", applescript], check=False)
+        except Exception as e:
+            print(f"Errore nell'esecuzione di AppleScript: {e}")
+    else:
+        # Per Windows e altri sistemi, usa il metodo Tkinter come prima
+        script_file = tempfile.mktemp(suffix='.py')
+        with open(script_file, 'w') as f:
+            f.write("""
+    import tkinter as tk
+    from tkinter import filedialog
+    import sys
+
+    root = tk.Tk()
+    root.attributes('-topmost', True)
+    root.withdraw()
+    file_path = filedialog.askopenfilename(
+        title="Seleziona un file da inviare",
+        filetypes=[("Tutti i file", "*"), ("File di testo", "*.txt")]
+    )
+
+    if file_path:
+        with open(sys.argv[1], 'w') as f:
+            f.write(file_path)
+    """)
+
+        # Esegui lo script in un processo separato
+        subprocess.run([sys.executable, script_file, temp_file], check=False)
+
+        # Pulisci il file dello script
+        try:
+            if os.path.exists(script_file):
+                os.remove(script_file)
+        except:
+            pass
+
+    try:
+        # Leggi il risultato
+        if os.path.exists(temp_file) and os.path.getsize(temp_file) > 0:
+            with open(temp_file, 'r') as f:
+                file_path = f.read().strip()
+                if file_path:
+                    dpg.set_value("file_field_privata", file_path)
+                    print(f"File selezionato per chat privata: {file_path}")
+    finally:
+        # Pulisci il file temporaneo
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        except:
+            pass
+
+        dpg.configure_item("btn_file_chat_privata", enabled=True)
+        select_private_file.in_progress = False
+
+def invia_messaggio_privato():
+    #Invia un messaggio privato o un file al contatto attuale
+    global client_socket, username_client_chat_corrente, chat_attive
+
+    if not username_client_chat_corrente:
+        dpg.set_value("logerr", "Seleziona prima un contatto")
+        return
+
+    msg = dpg.get_value("input_txt_chat_privata")
+    file_field = dpg.get_value("file_field_privata")
+
+    # Verifica se sono entrambi vuoti
+    if not msg and not file_field:
+        return
+
+    timestamp = str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    # Priorità all'invio del file
+    if file_field:
+        try:
+            # Verifica che il file esista
+            if not os.path.exists(file_field):
+                dpg.set_value("logerr", f"Errore: il file {file_field} non esiste")
+                return
+
+            # Verifica che il file non sia vuoto
+            if os.path.getsize(file_field) == 0:
+                dpg.set_value("logerr", "Errore: il file è vuoto")
+                return
+
+            # Ottieni il nome del file dal percorso
+            name_file = os.path.basename(file_field)
+
+            # Forza una riconnessione FTP
+            ftp_success = setup_connection_server_FTP()
+            if not ftp_success:
+                dpg.set_value("logerr", "Errore nella connessione FTP. Impossibile inviare il file.")
+                return
+
+            # Aggiungi messaggio alla chat (prima dell'invio)
+            message = f"\n{timestamp} - Tu -> Invio del file {name_file} in corso..."
+            chat_attive[username_client_chat_corrente] += message
+            dpg.set_value("chatlog_field_privata", chat_attive[username_client_chat_corrente])
+
+            # Invia il file tramite FTP
+            with open(file_field, 'rb') as file:
+                print(f"Invio del file {name_file} in chat privata con {username_client_chat_corrente}...")
+                ftp_server.storbinary(f"STOR {name_file}", file)
+                print(f"File {name_file} inviato con successo")
+
+            # Dopo il caricamento FTP, notifica il server
+            # Formato: PRIVATE:sending_file:destinatario:timestamp:nome_file
+            file_notification = f"PRIVATE:sending_file:{username_client_chat_corrente}:{timestamp}:{name_file}"
+            client_socket.send(file_notification.encode('utf-8'))
+
+            # Aggiorna il messaggio nella chat
+            sent_message = f"\n{timestamp} - Tu -> File {name_file} inviato con successo"
+            chat_attive[username_client_chat_corrente] = chat_attive[username_client_chat_corrente].replace(message,sent_message)
+            dpg.set_value("chatlog_field_privata", chat_attive[username_client_chat_corrente])
+
+            # Pulisci il campo file dopo l'invio
+            dpg.set_value("file_field_privata", "")
+
+        except Exception as e:
+            error_msg = f"Errore nell'invio del file: {e}"
+            dpg.set_value("logerr", error_msg)
+
+            # Aggiorna il log con l'errore
+            error_message = f"\n{timestamp} - Tu -> Errore nell'invio del file {os.path.basename(file_field)}"
+            chat_attive[username_client_chat_corrente] += error_message
+            dpg.set_value("chatlog_field_privata", chat_attive[username_client_chat_corrente])
+
+    elif msg:  # Solo se c'è un messaggio e non un file
+        try:
+            # Invia il messaggio privato - MODIFICATO IL FORMATO
+            client_socket.send(f"PRIVATE:{username_client_chat_corrente}:{msg}".encode("utf-8"))
+
+            # Aggiungi il messaggio alla chat locale con formato standardizzato
+            formatted_msg = f"\n{timestamp} - Tu --> {msg}"
+            chat_attive[username_client_chat_corrente] += formatted_msg
+            dpg.set_value("chatlog_field_privata", chat_attive[username_client_chat_corrente])
+
+            # Pulisci il campo di input
+            dpg.set_value("input_txt_chat_privata", "")
+
+        except Exception as e:
+            error_msg = f"Errore durante l'invio del messaggio: {str(e)}"
+            dpg.set_value("logerr", error_msg)
+
+
+def apri_chat_con(utente):
+    global username_client_chat_corrente
+    print(f"Aprendo chat con {utente}")
+
+    if dpg.does_item_exist("notifica_messaggio_privato"):
+        dpg.delete_item("notifica_messaggio_privato")
+
+    # Imposta l'utente corrente
+    username_client_chat_corrente = utente
+
+    if dpg.get_value("tab_bar") != 2:
+        dpg.set_value("tab_bar", "chat_private")
+
+    # Assicurati che esista una cartella per i download di questa chat
+    download_folder = get_chat_download_folder(utente)
+    print(f"Cartella download per chat con {utente}: {download_folder}")
+
+    # Aggiorna l'intestazione della chat
+    dpg.set_value("titolo_chat_attiva", f"Chat con {username_client_chat_corrente}")
+
+    # Mostra la cronologia dei messaggi
+    if utente in chat_attive:
+        dpg.set_value("chatlog_field_privata", chat_attive[utente])
+    else:
+        dpg.set_value("chatlog_field_privata", "")
+        chat_attive[utente] = ""
+
+
+def aggiorna_lista_contatti():
+    #Aggiorna la lista dei contatti nella finestra laterale
+
+    # Pulisci la lista precedente
+
+    if dpg.does_item_exist("lista_contatti"):
+        dpg.delete_item("lista_contatti", children_only=True)
+
+        # Aggiungi i contatti con cui abbiamo una chat attiva
+        for username in chat_attive.keys():
+            dpg.add_button(
+                label=username,
+                tag=f"contact_{username}",
+                callback=lambda:apri_chat_con(username), #funzione lambda senza nome
+                width=-1,
+                parent="lista_contatti"
+            )
+
+
+def inizia_chat_con(utente):
+    #Inizia una nuova chat con un utente
+    if utente not in chat_attive:
+        chat_attive[utente] = ""
+        aggiorna_lista_contatti()
+        base_dir = os.path.dirname(os.path.abspath(__file__))  # directory corrente dello script
+        private_chat_download_directory = os.path.join(base_dir, "client_chats_file_directory", utente)
+        if not os.path.exists(private_chat_download_directory):
+            os.makedirs(private_chat_download_directory)
+            print(f"Creata cartella di download: {private_chat_download_directory}")
+
+    print(f"funzione inizia chat con {utente}")
+
+    # Apre la chat con l'utente scelto
+    apri_chat_con(utente)
+
+    # Chiude la finestra dell'aggiungi contatti
+    if dpg.does_item_exist("finestra_aggiungi_contatto"):
+        dpg.delete_item("finestra_aggiungi_contatto")
+
+
+def mostra_aggiungi_contatti():
+    global utenti_disponibili
+
+    if dpg.does_item_exist("finestra_aggiungi_contatto"):
+        dpg.delete_item("finestra_aggiungi_contatto")
+
+    with dpg.window(label="Aggiungi contatto", tag="finestra_aggiungi_contatto",
+                    modal=True, width=300, height=400):
+        dpg.add_text("Utenti disponibili:")
+        dpg.add_separator()
+
+        with dpg.child_window(tag="lista_utenti_disponibili", height=300, width=-1):
+            for user in utenti_disponibili:
+                print(user)
+                #if user != nome_utente_personale:  Non mostrare l'utente corrente
+                dpg.add_button(label=user, tag=f"add_user_{user}",
+                                   callback=lambda:inizia_chat_con(user), width=-1) #lambda è una funzione senza nome. Se non facessi così non potrei passare nulla come argomento o mi eseguirebbe subito la funzione con le parentesi
+
+        dpg.add_button(label="Chiudi", callback=lambda:dpg.delete_item("finestra_aggiungi_contatto"), width=-1)
+
+
+# Creazione dell'interfaccia
+create_gui()
+
+# Aggiungi la callback per il ridimensionamento della viewport
+dpg.set_viewport_resize_callback(center_items)
+
+dpg.set_primary_window("window", True)
+dpg.setup_dearpygui()
+dpg.show_viewport()
+
+# Esegui il centering iniziale dopo aver mostrato la viewport
+center_items()
+
+while dpg.is_dearpygui_running():
+    if server_started:
+        with chatlog_lock:
+            if dpg.get_value("chatlog_field") != chatlog:
+                dpg.set_value("chatlog_field", chatlog)
+    dpg.render_dearpygui_frame()
+
+if server_started:
+    try:
+        client_socket.send("closed connection")
+        client_socket.close()
+    except:
+        pass
+
+dpg.destroy_context()
