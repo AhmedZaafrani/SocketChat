@@ -350,7 +350,7 @@ def notifica_messaggio_privato(daChi):
     window_width = 280
     window_height = 80
     margin = 10  # margine in pixel
-    if dpg.get_value("tab_bar") == "chat_private":
+    if dpg.get_value("tab_bar") != "chat_private":
         with dpg.window(label=f"private_message", tag="notifica_messaggio_privato",
                         modal=True, no_collapse=True, no_resize=True,
                         width=window_width, height=window_height,
@@ -367,22 +367,33 @@ def notifica_messaggio():
     viewport_width = dpg.get_viewport_width()
     viewport_height = dpg.get_viewport_height()
     window_width = 250
-    window_height = 40
+    window_height = 100  # Aumentato per dare più spazio
     margin = 10  # margine in pixel
 
+    # Verifica se la tab corrente non è la chat globale
     if dpg.get_value("tab_bar") != "chat":
+        # Controlla se la finestra di notifica esiste già
         if dpg.does_item_exist("notifica_messaggio_globale"):
             dpg.show_item("notifica_messaggio_globale")
+            # Aggiorna la posizione in caso la finestra sia stata ridimensionata
+            dpg.set_item_pos("notifica_messaggio_globale",
+                             [viewport_width - window_width - margin,
+                              viewport_height - window_height - margin])
         else:
-            with dpg.window(label=f"messaggio_globale", tag="notifica_messaggio_globale",
-                            modal=True, no_collapse=True, no_resize=True,
+            # Crea una nuova finestra di notifica
+            with dpg.window(label="Nuovo messaggio", tag="notifica_messaggio_globale",
+                            modal=False, no_collapse=True, no_resize=True,
                             width=window_width, height=window_height,
-                            pos=[viewport_width - window_width - margin, viewport_height - window_height - margin]):
-                # Aggiunge il messaggio della chiamata
-                dpg.add_text(f"Hai ricevuto un messaggio globale", color=[255, 255, 255])
+                            pos=[viewport_width - window_width - margin,
+                                 viewport_height - window_height - margin],
+                            no_title_bar=False):
+                dpg.add_spacer(height=5)
+                dpg.add_text("Hai ricevuto un messaggio globale", color=[255, 255, 255])
+                dpg.add_spacer(height=10)
                 with dpg.group(horizontal=True):
-                    dpg.add_button(label="Apri", tag="btn_notifica_globale", width=70, callback=apri_globale)
-                    dpg.add_button(label="Chiudi", tag="btn_destroy_globale", width=70, callback=destroy_notifica)
+                    dpg.add_button(label="Apri", tag="btn_notifica_globale", width=110, callback=apri_globale)
+                    dpg.add_spacer(width=10)
+                    dpg.add_button(label="Chiudi", tag="btn_destroy_globale", width=110, callback=destroy_notifica)
 
 def apri_globale():
     if dpg.get_value("tab_bar") != "chat":
