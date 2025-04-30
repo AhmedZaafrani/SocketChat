@@ -29,8 +29,13 @@ from tkfilebrowser import askopendirname, askopenfilename
 from dearpygui.dearpygui import configure_item
 
 
+# Variabili per il controllo della frequenza di aggiornamento della UI
+UI_UPDATE_INTERVAL = 0.1  # Intervallo in secondi per aggiornare l'interfaccia utente
+last_ui_update_time = 0  # Timestamp dell'ultimo aggiornamento UI
+
 # Costanti per le chiamate e le videochiamate
-CHUNK = 1024
+# Miglioramento della qualità audio
+CHUNK = 512  # Ridotto da 1024 per ridurre la latenza audio
 FORMAT = pyaudio.paInt16
 CHANNEL = 1
 RATE = 44100 # valore che consiglia la documentazione
@@ -41,7 +46,7 @@ PORT_ATTESA_CHIAMATE = 12348
 
 SERVER_IP = "192.168.1.7" #ip server a cui collegarsi
 DEFAULT_PORT = 12345
-BUFFER_SIZE = 1024
+BUFFER_SIZE = 4096  # Aumentato da 1024 per migliorare la stabilità
 
 dpg.create_context()
 dpg.create_viewport(title='Socket Chat', width=950, height=800)
@@ -83,6 +88,12 @@ utenti_disponibili = []  # Lista di utenti disponibili
 chat_attive = {}  # username -> cronologia chat
 username_client_chat_corrente = ""  # Username del contatto attualmente selezionato
 
+if os.name == 'nt':  # Windows
+    try:
+        import win32api, win32process, win32con
+    except ImportError:
+        pass  # Gestiremo questo caso nella funzione set_thread_priority
+
 
 def get_chat_download_folder(username):
     """Restituisce la cartella dedicata per i download di una specifica chat"""
@@ -113,6 +124,30 @@ def get_chat_download_folder(username):
 
     return chat_folder
 
+
+def set_thread_priority(thread_type="audio"):
+    """Imposta la priorità del thread corrente in base al tipo.
+
+    Args:
+        thread_type: Tipo di thread ("audio", "video", o "ui")
+    """
+    # Solo su Windows possiamo impostare la priorità
+    if os.name == 'nt':
+        try:
+            thread_id = win32api.GetCurrentThreadId()
+            thread_handle = win32api.OpenThread(win32con.THREAD_SET_INFORMATION, False, thread_id)
+
+            if thread_type == "audio":
+                # Massima priorità per l'audio
+                win32process.SetThreadPriority(thread_handle, win32process.THREAD_PRIORITY_TIME_CRITICAL)
+            elif thread_type == "video":
+                # Alta priorità per il video
+                win32process.SetThreadPriority(thread_handle, win32process.THREAD_PRIORITY_HIGHEST)
+            elif thread_type == "ui":
+                # Priorità normale per l'UI
+                win32process.SetThreadPriority(thread_handle, win32process.THREAD_PRIORITY_NORMAL)
+        except Exception as e:
+            print(f"Errore nell'impostazione della priorità del thread {thread_type}: {e}")
 
 def setup_connection_server_FTP():
     global ftp_server
@@ -743,6 +778,14 @@ def call(ip):
         print(f"Chiamata in corso verso IP: {ip}, porta: {PORT_CHIAMATE}")
         socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         socket_chiamata.settimeout(5)  # Timeout più breve di 5 secondi
+        socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)  # Buffer di ricezione più grande
+        socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)  # Buffer di invio più grande
+
+        # Attiva la modalità no-delay per ridurre la latenza
+        socket_chiamata.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+        # Imposta keepalive per mantenere la connessione attiva
+        socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
 
         # Tenta la connessione
         try:
@@ -787,24 +830,59 @@ def call(ip):
         if response == "CALLREQUEST:ACCEPT":
             chiamata_in_corso = True
 
-            # Inizializza PyAudio
+            # Inizializza PyAudio con impostazioni ottimizzate per la latenza
             p = pyaudio.PyAudio()
+
+            # Cerca di ottenere il buffer size più piccolo possibile supportato dal sistema
+            # Buffer size più piccoli riducono la latenza ma potrebbero causare artefatti
+            min_buffer = CHUNK
+
+            # Apre lo stream audio con impostazioni ottimizzate per bassa latenza
             audioStream = p.open(
                 format=FORMAT,
                 rate=RATE,
                 channels=CHANNEL,
                 input=True,
                 output=True,
-                frames_per_buffer=CHUNK
+                frames_per_buffer=min_buffer,
+                input_host_api_specific_stream_info=get_low_latency_settings(),
+                output_host_api_specific_stream_info=get_low_latency_settings(),
+                stream_callback=None  # Usiamo un approccio a polling per maggiore controllo
             )
 
-            # Avvia thread audio
+            print("Stream audio inizializzato con impostazioni a bassa latenza")
+
+            # Avvia thread audio con alta priorità
             audio_thread = threading.Thread(target=gestisci_audio)
             audio_thread.daemon = True
+
+            # Imposta la massima priorità per il thread audio
+            try:
+                # Su sistemi Unix/Linux
+                if hasattr(os, "sched_get_priority_max") and hasattr(os, "sched_setscheduler"):
+                    policy = os.SCHED_RR if hasattr(os, "SCHED_RR") else os.SCHED_FIFO
+                    param = struct.pack("I", os.sched_get_priority_max(policy))
+                    os.sched_setscheduler(0, policy, param)
+                # Su Windows - sarà gestito dalla funzione set_thread_priority
+            except Exception as e:
+                print(f"Avviso: Impossibile impostare alta priorità per thread audio: {e}")
+
             audio_thread.start()
 
             # Mostra finestra di chiamata
-            mostra_finestra_chiamata("ACCEPTED")
+            try:
+                # Piccolo timeout per dare tempo ai thread di avviarsi
+                time.sleep(0.05)
+                mostra_finestra_chiamata("ACCEPTED")
+            except Exception as e:
+                print(f"Errore nel mostrare la finestra di chiamata: {e}")
+                # Retry dopo una breve pausa
+                time.sleep(0.1)
+                try:
+                    mostra_finestra_chiamata("ACCEPTED")
+                except Exception as e2:
+                    print(f"Secondo tentativo fallito: {e2}")
+
         else:
             print(f"Chiamata rifiutata: {response}")
             mostra_finestra_chiamata("REFUSED")
@@ -815,9 +893,10 @@ def call(ip):
         mostra_finestra_chiamata("ERROR")
         termina_chiamata()
     finally:
-        # Riabilita i pulsanti di chiamata in ogni caso
-        dpg.configure_item("btn_videochiama_privato", enabled=True)
-        dpg.configure_item("btn_chiama_privato", enabled=True)
+        # Riabilita i pulsanti di chiamata in ogni caso (verranno disabilitati nuovamente se la chiamata procede)
+        if not chiamata_in_corso:
+            dpg.configure_item("btn_videochiama_privato", enabled=True)
+            dpg.configure_item("btn_chiama_privato", enabled=True)
 
 
 def debug_richiesta_ip(destinatario, is_video):
@@ -837,111 +916,136 @@ def debug_richiesta_ip(destinatario, is_video):
     # Ritorna il comando per uso immediato
     return comando
 
-def videocall(ip):
-    """
-    Inizia una videochiamata con l'utente all'IP specificato.
-    """
-    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
 
-    # Disabilita immediatamente i pulsanti per evitare chiamate multiple
-    dpg.configure_item("btn_videochiama_privato", enabled=False)
-    dpg.configure_item("btn_chiama_privato", enabled=False)
-
+def get_low_latency_settings():
+    """
+    Crea impostazioni a bassa latenza specifiche per l'host API
+    """
     try:
-        is_video = True  # Videochiamata (audio + video)
-        utente_in_chiamata = username_client_chat_corrente
+        # Su Windows, utilizziamo le impostazioni WASAPI per la bassa latenza
+        if os.name == 'nt':
+            if not hasattr(pyaudio.PaMacCoreStreamInfo, 'kAudioLowLatencyMode'):
+                # Creazione di strutture dati per le API WASAPI
+                # (questo è uno stub, pyaudio non fornisce direttamente queste API)
+                return None
 
-        print(f"Videochiamata in corso verso IP: {ip}, porta: {PORT_CHIAMATE}")
-        socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket_chiamata.settimeout(5)  # Timeout più breve di 5 secondi
+        # Su macOS, utilizziamo Core Audio per la bassa latenza
+        elif sys.platform == 'darwin':
+            # Richiede pyaudio compilato con supporto Core Audio
+            if hasattr(pyaudio, 'paMacCoreStreamInfo'):
+                stream_info = pyaudio.PaMacCoreStreamInfo(
+                    flags=pyaudio.PaMacCoreStreamInfo.kAudioLowLatencyMode
+                )
+                return stream_info
 
-        # Tenta la connessione
-        try:
-            socket_chiamata.connect((ip, PORT_CHIAMATE))
-            print(f"Connessione stabilita con {ip}:{PORT_CHIAMATE}")
-        except ConnectionRefusedError:
-            print(f"Connessione rifiutata da {ip}:{PORT_CHIAMATE}")
-            mostra_finestra_chiamata("UNREACHABLE")
-            termina_chiamata()
-            return
-        except socket.timeout:
-            print(f"Timeout nella connessione a {ip}:{PORT_CHIAMATE}")
-            mostra_finestra_chiamata("TIMEOUT")
-            termina_chiamata()
-            return
-        except Exception as e:
-            print(f"Errore di connessione: {e}")
-            mostra_finestra_chiamata("ERROR")
-            termina_chiamata()
-            return
-
-        # Invia richiesta di chiamata - IMPORTANTE: Nome mittente
-        request = f"CALLREQUEST:{nome_utente_personale}:{is_video}"
-        print(f"Invio richiesta: {request}")
-        socket_chiamata.send(request.encode('utf-8'))
-
-        # Attendi risposta
-        try:
-            response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
-            print(f"Risposta ricevuta: {response}")
-        except socket.timeout:
-            print("Timeout in attesa di risposta alla richiesta di videochiamata")
-            mostra_finestra_chiamata("TIMEOUT")
-            termina_chiamata()
-            return
-        except Exception as e:
-            print(f"Errore nella ricezione della risposta: {e}")
-            mostra_finestra_chiamata("ERROR")
-            termina_chiamata()
-            return
-
-        if response == "CALLREQUEST:ACCEPT":
-            chiamata_in_corso = True
-
-            # Inizializza PyAudio
-            p = pyaudio.PyAudio()
-            audioStream = p.open(
-                format=FORMAT,
-                rate=RATE,
-                channels=CHANNEL,
-                input=True,
-                output=True,
-                frames_per_buffer=CHUNK
-            )
-
-            # Inizializza VideoCapture
-            VideoCapture = cv2.VideoCapture(0)  # 0 è la webcam predefinita
-
-            # Verifica che la webcam sia stata aperta correttamente
-            if not VideoCapture.isOpened():
-                print("Errore: impossibile aprire la webcam")
-            else:
-                print("Webcam inizializzata con successo")
-
-            # Avvia thread audio e video
-            audio_thread = threading.Thread(target=gestisci_audio)
-            audio_thread.daemon = True
-            audio_thread.start()
-
-            video_thread = threading.Thread(target=gestisci_video)
-            video_thread.daemon = True
-            video_thread.start()
-
-            # Mostra finestra di chiamata
-            mostra_finestra_chiamata("ACCEPTED")
+        # Su Linux, utilizziamo ALSA o PulseAudio
         else:
-            print(f"Videochiamata rifiutata: {response}")
-            mostra_finestra_chiamata("REFUSED")
-            termina_chiamata()
+            # Impostazioni specifiche per ALSA/PulseAudio
+            # (questo è uno stub perché pyaudio non fornisce un'API specifica)
+            return None
+    except Exception as e:
+        print(f"Avviso: Impossibile creare impostazioni a bassa latenza: {e}")
+
+    return None
+
+
+def get_low_latency_settings():
+    """
+    Crea impostazioni a bassa latenza specifiche per l'host API
+    """
+    try:
+        # Su Windows, utilizziamo le impostazioni WASAPI per la bassa latenza
+        if os.name == 'nt':
+            if not hasattr(pyaudio.PaMacCoreStreamInfo, 'kAudioLowLatencyMode'):
+                # Creazione di strutture dati per le API WASAPI
+                # (questo è uno stub, pyaudio non fornisce direttamente queste API)
+                return None
+
+        # Su macOS, utilizziamo Core Audio per la bassa latenza
+        elif sys.platform == 'darwin':
+            # Richiede pyaudio compilato con supporto Core Audio
+            if hasattr(pyaudio, 'paMacCoreStreamInfo'):
+                stream_info = pyaudio.PaMacCoreStreamInfo(
+                    flags=pyaudio.PaMacCoreStreamInfo.kAudioLowLatencyMode
+                )
+                return stream_info
+
+        # Su Linux, utilizziamo ALSA o PulseAudio
+        else:
+            # Impostazioni specifiche per ALSA/PulseAudio
+            # (questo è uno stub perché pyaudio non fornisce un'API specifica)
+            return None
+    except Exception as e:
+        print(f"Avviso: Impossibile creare impostazioni a bassa latenza: {e}")
+
+    return None
+
+
+def detect_mobile_hotspot(ip):
+    """
+    Tenta di rilevare se la connessione è su un hotspot mobile
+    basandosi sul ping e sul pattern dell'indirizzo IP
+    """
+    try:
+        # Fai un test di ping per verificare latenza e jitter
+        ping_count = 3
+        if os.name == 'nt':  # Windows
+            ping_cmd = f"ping -n {ping_count} {ip}"
+        else:  # Linux/Mac
+            ping_cmd = f"ping -c {ping_count} {ip}"
+
+        ping_result = subprocess.run(ping_cmd, shell=True, capture_output=True, text=True)
+
+        if ping_result.returncode == 0:
+            output = ping_result.stdout
+
+            # Estrai i tempi di ping
+            ping_times = []
+            if os.name == 'nt':  # Windows
+                pattern = r'tempo=(\d+)ms'
+            else:  # Linux/Mac
+                pattern = r'time=(\d+\.\d+) ms'
+
+            matches = re.findall(pattern, output)
+            for match in matches:
+                ping_times.append(float(match))
+
+            # Calcola il ping medio e jitter
+            if ping_times:
+                avg_ping = sum(ping_times) / len(ping_times)
+
+                # Calcola il jitter (variazione del ping)
+                if len(ping_times) > 1:
+                    jitter = sum(abs(ping_times[i] - ping_times[i - 1]) for i in range(1, len(ping_times))) / (
+                                len(ping_times) - 1)
+                else:
+                    jitter = 0
+
+                print(f"Test connessione: ping={avg_ping:.1f}ms, jitter={jitter:.1f}ms")
+
+                # Indicatori di hotspot mobile:
+                # 1. Ping elevato (>50ms) per connessioni locali
+                # 2. Jitter elevato (>10ms)
+                if avg_ping > 50 or jitter > 10:
+                    print("Rilevamento automatico: probabile hotspot mobile")
+                    return True
+
+        # Verifica range IP tipici degli hotspot
+        hotspot_patterns = [
+            r'^192\.168\.43\.',  # Tipico di hotspot Android
+            r'^172\.20\.10\.',  # Tipico di hotspot iOS
+            r'^10\.0\.0\.'  # Alcuni hotspot
+        ]
+
+        for pattern in hotspot_patterns:
+            if re.match(pattern, ip):
+                print(f"Rilevato IP tipico di hotspot mobile: {ip}")
+                return True
 
     except Exception as e:
-        print(f"Errore generale durante la videochiamata: {e}")
-        mostra_finestra_chiamata("ERROR")
-        termina_chiamata()
-    finally:
-        # Riabilita i pulsanti di chiamata in ogni caso
-        dpg.configure_item("btn_videochiama_privato", enabled=True)
-        dpg.configure_item("btn_chiama_privato", enabled=True)
+        print(f"Errore nel rilevamento hotspot: {e}")
+
+    return False
 
 def download_private_file(sender, filename, timestamp, notification_message):
     """Scarica un file inviato in una chat privata"""
@@ -1839,75 +1943,139 @@ def attiva_disattiva_audio():
 
 
 def aggiorna_video_remoto(frame_remoto):
+    """Aggiorna la texture remota con il nuovo frame."""
     if not dpg.does_item_exist("texture_destinatario") or frame_remoto is None:
         return
 
-    # Converti e formatta il frame
-    frame_rgb = cv2.cvtColor(frame_remoto, cv2.COLOR_BGR2RGB)
-    frame_resized = cv2.resize(frame_rgb, (320, 240))
-    frame_float = frame_resized.astype(np.float32) / 255.0  # Normalizza a [0,1]
+    try:
+        # Converti e formatta il frame
+        frame_rgb = cv2.cvtColor(frame_remoto, cv2.COLOR_BGR2RGB)
+        frame_resized = cv2.resize(frame_rgb, (320, 240))
+        frame_float = frame_resized.astype(np.float32) / 255.0  # Normalizza a [0,1]
 
-    # Aggiorna la texture
-    dpg.set_value("texture_destinatario", frame_float.ravel())
+        # Aggiorna la texture solo se l'interfaccia è visibile e la finestra esiste
+        if dpg.does_item_exist("finestra_chiamata") and dpg.is_item_visible("finestra_chiamata"):
+            dpg.set_value("texture_destinatario", frame_float.ravel())
+    except Exception as e:
+        # Ignora errori di aggiornamento UI per non bloccare il thread video
+        pass
 
 def aggiorna_video_locale(frame):
+    """Aggiorna la texture locale con il nuovo frame."""
     if not dpg.does_item_exist("texture_mittente") or frame is None:
         return
 
-    # Converti e formatta il frame
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    frame_resized = cv2.resize(frame_rgb, (320, 240))
-    frame_float = frame_resized.astype(np.float32) / 255.0  # Normalizza a [0,1]
+    try:
+        # Converti e formatta il frame in modo efficiente
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame_resized = frame_rgb  # Il frame è già stato ridimensionato nella funzione chiamante
+        frame_float = frame_resized.astype(np.float32) / 255.0  # Normalizza a [0,1]
 
-    dpg.set_value("texture_mittente", frame_float.ravel())
+        # Aggiorna la texture solo se l'interfaccia è visibile e la finestra esiste
+        if dpg.does_item_exist("finestra_chiamata") and dpg.is_item_visible("finestra_chiamata"):
+            dpg.set_value("texture_mittente", frame_float.ravel())
+    except Exception as e:
+        # Ignora errori di aggiornamento UI per non bloccare il thread video
+        pass
+
 
 def gestisci_video():
     global is_video, is_video_on, socket_chiamata
+
+    # Imposta alta priorità per questo thread
+    set_thread_priority("video")
+
+    # Utilizzato per limitare la frequenza di aggiornamento del frame
+    last_frame_time = time.time()
+    frame_interval = 0.033  # Circa 30 FPS
+
     try:
         while is_video_on and socket_chiamata:
+            current_time = time.time()
+
+            # Limitazione frame rate per ridurre carico CPU e rete
+            if current_time - last_frame_time < frame_interval:
+                time.sleep(0.001)  # Piccola pausa se non è il momento di un nuovo frame
+                continue
+
+            last_frame_time = current_time
+
             # Cattura frame dalla webcam
             ret, frame = VideoCapture.read()
             if not ret:
+                time.sleep(0.005)  # Piccola pausa in caso di errore lettura webcam
                 continue
 
             # Ridimensiona e comprimi il frame
             frame = cv2.resize(frame, (320, 240))
-            _, encoded_frame = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
+
+            # Aggiorna l'anteprima locale solo se l'interfaccia è visibile
+            # Utilizziamo una variabile wrapper per thread safety
+            try:
+                if dpg.does_item_exist("texture_mittente"):
+                    aggiorna_video_locale(frame)
+            except:
+                pass  # Ignora errori di aggiornamento UI
+
+            # Comprimi il frame con qualità ridotta per migliorare le prestazioni di rete
+            _, encoded_frame = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 30])
             data = encoded_frame.tobytes()
 
-            aggiorna_video_locale(frame)
-
             # Invia dimensione e dati del frame
-            size = len(data)
-            socket_chiamata.send(struct.pack('!I', size) + data)
+            try:
+                size = len(data)
+                socket_chiamata.settimeout(0.1)  # Timeout breve per l'invio
+                socket_chiamata.send(struct.pack('!I', size) + data)
+            except Exception as e:
+                print(f"Errore nell'invio del frame: {e}")
+                # Non interrompere il ciclo per un singolo errore
 
             # Ricevi frame video
             try:
-                socket_chiamata.settimeout(0.1)
+                socket_chiamata.settimeout(0.05)  # Timeout molto breve per non bloccare
                 size_data = socket_chiamata.recv(4)
                 if size_data:
                     size = struct.unpack('!I', size_data)[0]
-                    frame_data = b''
-                    while len(frame_data) < size:
-                        pacchetto = socket_chiamata.recv(min(size - len(frame_data), 4096))
-                        if not pacchetto:
-                            break
-                        frame_data += pacchetto
 
+                    # Limita la dimensione massima per sicurezza
+                    if size > 1000000:  # 1MB max
+                        continue
+
+                    frame_data = b''
+                    remaining = size
+
+                    # Loop di ricezione con timeout
+                    start_time = time.time()
+                    while len(frame_data) < size and time.time() - start_time < 0.1:  # Max 100ms per frame
+                        try:
+                            pacchetto = socket_chiamata.recv(min(remaining, 4096))
+                            if not pacchetto:
+                                break
+                            frame_data += pacchetto
+                            remaining -= len(pacchetto)
+                        except socket.timeout:
+                            # Se il timeout scade, passiamo al frame successivo
+                            break
+
+                    # Se abbiamo ricevuto tutti i dati, decodifica e mostra
                     if len(frame_data) == size:
-                        # Decodifica e mostra il frame
-                        frame_remoto = cv2.imdecode(np.frombuffer(frame_data, dtype=np.uint8), cv2.IMREAD_COLOR)
-                        aggiorna_video_remoto(frame_remoto)
+                        try:
+                            # Decodifica il frame
+                            frame_remoto = cv2.imdecode(np.frombuffer(frame_data, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+                            # Aggiorna UI solo se l'elemento esiste
+                            if dpg.does_item_exist("texture_destinatario"):
+                                aggiorna_video_remoto(frame_remoto)
+                        except Exception as e:
+                            print(f"Errore nella decodifica del frame: {e}")
             except socket.timeout:
-                # Nessun dato disponibile, continua
+                # Nessun dato disponibile, continua al frame successivo
                 pass
             except Exception as e:
-                print(f"Errore nella ricezione video P2P: {e}")
-
-            time.sleep(0.033)  # Circa 30 FPS
+                print(f"Errore nella ricezione video: {e}")
 
     except Exception as e:
-        print(f"Errore nella gestione video P2P: {e}")
+        print(f"Errore nella gestione video: {e}")
         # Non terminare la chiamata, potrebbe essere solo audio
 
 
@@ -1919,6 +2087,9 @@ def gestisci_audio():
     global chiamata_in_corso, socket_chiamata, audioStream, is_audio_on
 
     print("Avvio thread gestione audio")
+
+    # Imposta alta priorità per questo thread
+    set_thread_priority("audio")
 
     # Verifica che lo stream audio sia inizializzato
     if audioStream is None:
@@ -1936,15 +2107,15 @@ def gestisci_audio():
             try:
                 if is_audio_on:
                     # Leggi dati audio dal microfono
-                    audio_data = audioStream.read(buffer_size, exception_on_overflow=False)
+                    audio_data = audioStream.read(buffer_size, exception_on_overflow=True)
                     if audio_data:
                         # Invia i dati audio
                         socket_chiamata.send(audio_data)
 
                 # Ricezione audio
                 try:
-                    # Imposta un timeout breve per la ricezione
-                    socket_chiamata.settimeout(0.1)
+                    # Imposta un timeout molto breve per la ricezione per non bloccare
+                    socket_chiamata.settimeout(0.02)  # 20ms timeout
 
                     # Ricevi dati audio
                     audio_ricevuto = socket_chiamata.recv(receive_buffer_size)
@@ -1958,21 +2129,19 @@ def gestisci_audio():
                     pass
                 except Exception as e:
                     print(f"Errore nella ricezione audio: {e}")
-                    if "Connessione in corso interrotta forzatamente dall'host remoto" in e:
+                    if "Connessione in corso interrotta forzatamente dall'host remoto" in str(e):
                         termina_chiamata()
                         chiamata_in_corso = False
                     # Non interrompere il loop per errori minori
 
             except Exception as e:
                 print(f"Errore nell'invio audio: {e}")
-                if "Connessione interrotta dal software del computer host" in e:
+                if "Connessione interrotta dal software del computer host" in str(e):
                     termina_chiamata()
                     chiamata_in_corso = False
-                # Piccola pausa per evitare un ciclo troppo rapido in caso di errore
-                time.sleep(0.01)
 
-            # Pausa breve per ridurre l'utilizzo della CPU
-            time.sleep(0.001)
+            # Micropausa per ridurre l'utilizzo della CPU senza impattare l'audio
+            time.sleep(0.0005)  # 0.5ms, praticamente impercettibile per l'audio
 
     except Exception as e:
         print(f"Errore critico nella gestione audio: {e}")
