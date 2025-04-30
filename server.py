@@ -242,7 +242,7 @@ def handle_client_connection(client, address):
 
                         except Exception as e:
                             print(f"Errore nella gestione del file privato: {e}")
-                    elif "IP_REQUEST" in message:
+                    elif "IP_REQUEST" in message: #FORMATO --> PRIVATE:IP_REQUEST:NOME:TYPE (TYPE BOOL) (type indica chiamata o no)
                         print(f"IP REQUEST MESSAGE {message}")
                         parts = message.split(":")
                         nome_utente_richiesto = parts[2]
@@ -276,23 +276,7 @@ def handle_client_connection(client, address):
                                     # Il server non tiene conto della cronologia della chat per evitare problemi di sicurezza
                                 else:
                                     client.send(f"ERROR: L'utente {recipient} non è connesso".encode('utf-8'))
-                            else:
-                                _, recipient, content = parts
-                                print(f"Etrato in modalit private con recipient {recipient}")
 
-                                if recipient in active_users:
-                                    # Formatta il messaggio privato
-
-                                    print(f"{recipient} è in active users")
-                                    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                    private_msg = f"PRIVATE:{timestamp} - {username} --> {content}"
-
-                                    active_users[recipient].send(private_msg.encode('utf-8'))
-                                    print(f"messaggio ({private_msg}) inviato")
-
-                                    # Il server non tiene conto della cronologia della chat per evitare problemi di sicurezza
-                                else:
-                                    client.send(f"ERROR: L'utente {recipient} non è connesso".encode('utf-8'))
                         except Exception as e:
                             print(f"Errore nell'invio del messaggio privato: {e}")
                 else:

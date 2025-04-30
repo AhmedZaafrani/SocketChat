@@ -2193,7 +2193,7 @@ def gestisci_video():
     frame_interval = 0.033  # Circa 30 FPS
 
     try:
-        while is_video_on and socket_chiamata:
+        while is_video_on and socket_chiamata and chiamata_in_corso:
             current_time = time.time()
 
             # Limitazione frame rate per ridurre carico CPU e rete
@@ -2241,7 +2241,7 @@ def gestisci_video():
                     size = struct.unpack('!I', size_data)[0]
 
                     # Limita la dimensione massima per sicurezza
-                    if size > 1000000:  # 1MB max
+                    if size > 10000000:  # 1MB max
                         continue
 
                     frame_data = b''
