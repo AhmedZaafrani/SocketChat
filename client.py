@@ -1146,13 +1146,13 @@ def videocall(ip):
                 # Risoluzione ridotta per connessioni deboli
                 VideoCapture.set(cv2.CAP_PROP_FRAME_WIDTH, 160)
                 VideoCapture.set(cv2.CAP_PROP_FRAME_HEIGHT, 120)
-                frame_interval = 0.05  # 20 FPS per risparmiare banda
+                frame_interval = 0.1  # 10 FPS per risparmiare banda
                 print("Rilevata connessione hotspot, risoluzione ridotta")
             else:
                 # Risoluzione normale
                 VideoCapture.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
                 VideoCapture.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-                frame_interval = 0.01  # 28 FPS
+                frame_interval = 0.05  # 20 FPS
 
             # Verifica che la webcam sia stata aperta correttamente
             if not VideoCapture.isOpened():
@@ -1929,8 +1929,8 @@ def mostra_finestra_chiamata(risposta):
 
     # Per gli stati di errore, mostriamo solo un messaggio semplice
     if risposta in ["UNREACHABLE", "TIMEOUT", "ERROR", "REFUSED"]:
-        window_width = 300
-        window_height = 150
+        window_width = 330
+        window_height = 170
         window_pos = [viewport_width // 2 - window_width // 2, viewport_height // 2 - window_height // 2]
 
         # Costruisci il messaggio in base alla risposta
