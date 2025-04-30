@@ -708,7 +708,7 @@ def listen_to_server():
                     # Non mostrare il messaggio privato nella chat globale
                     continue
 
-            if msg.startswith("IP:CALL:"):
+            if msg.startswith("IP:CALL:"): # risolto
                 keys = msg.split(':')
                 # risposta != "Nessun client con quel nome disponibile"
                 ip_utente_da_chiamare = keys[2]
