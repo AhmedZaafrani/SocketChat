@@ -759,7 +759,6 @@ def listen_to_server():
 
     print("Thread di ascolto terminato")
 
-
 def call(ip):
     """
     Inizia una chiamata audio con l'utente all'IP specificato.
