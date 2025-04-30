@@ -2696,7 +2696,9 @@ def aggiorna_lista_contatti():
 
 
 def inizia_chat_con(utente):
-    #Inizia una nuova chat con un utente
+    """Inizia una nuova chat con un utente"""
+    print(f"Inizializzazione chat con utente: {utente}")
+
     if utente not in chat_attive:
         chat_attive[utente] = ""
         aggiorna_lista_contatti()
@@ -2706,7 +2708,7 @@ def inizia_chat_con(utente):
             os.makedirs(private_chat_download_directory)
             print(f"Creata cartella di download: {private_chat_download_directory}")
 
-    print(f"funzione inizia chat con {utente}")
+    print(f"Apertura chat con {utente}")
 
     # Apre la chat con l'utente scelto
     apri_chat_con(utente)
@@ -2716,9 +2718,32 @@ def inizia_chat_con(utente):
         dpg.delete_item("finestra_aggiungi_contatto")
 
 
+def create_callback_for_user(username):
+    """
+    Factory function che crea una funzione di callback specifica per un utente.
+    Questa funzione evita il problema delle closure nelle lambda in Python.
+
+    Args:
+        username: Il nome dell'utente per cui creare la callback
+
+    Returns:
+        Una funzione di callback che chiamerà inizia_chat_con con l'username corretto
+    """
+
+    def callback():
+        print(f"Callback eseguita per l'utente: {username}")
+        inizia_chat_con(username)
+
+    return callback
+
 def mostra_aggiungi_contatti():
+    """
+    Mostra la finestra di dialogo per aggiungere nuovi contatti.
+    Corretto il problema con la callback lambda che usava sempre l'ultimo utente.
+    """
     global utenti_disponibili
 
+    # Se la finestra esiste già, rimuovila prima di ricrearla
     if dpg.does_item_exist("finestra_aggiungi_contatto"):
         dpg.delete_item("finestra_aggiungi_contatto")
 
@@ -2729,12 +2754,29 @@ def mostra_aggiungi_contatti():
 
         with dpg.child_window(tag="lista_utenti_disponibili", height=300, width=-1):
             for user in utenti_disponibili:
-                print(user)
-                #if user != nome_utente_personale:  Non mostrare l'utente corrente
-                dpg.add_button(label=user, tag=f"add_user_{user}",
-                                   callback=lambda:inizia_chat_con(user), width=-1) #lambda è una funzione senza nome. Se non facessi così non potrei passare nulla come argomento o mi eseguirebbe subito la funzione con le parentesi
+                print(f"Creazione pulsante per utente: {user}")
 
-        dpg.add_button(label="Chiudi", callback=lambda:dpg.delete_item("finestra_aggiungi_contatto"), width=-1)
+                # CORREZIONE: Passare l'utente come parametro alla funzione lambda
+                # utilizzando una factory function per creare la callback
+                callback_fn = create_callback_for_user(user)
+
+                # Creiamo un tag univoco per ogni pulsante basato sull'username
+                button_tag = f"add_user_{user}"
+
+                # Aggiungiamo il pulsante con la callback corretta
+                dpg.add_button(
+                    label=user,
+                    tag=button_tag,
+                    callback=callback_fn,
+                    width=-1
+                )
+
+        # Pulsante per chiudere la finestra
+        dpg.add_button(
+            label="Chiudi",
+            callback=lambda: dpg.delete_item("finestra_aggiungi_contatto"),
+            width=-1
+        )
 
 
 # Creazione dell'interfaccia
