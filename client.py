@@ -28,7 +28,6 @@ import dearpygui.dearpygui as dpg
 from tkfilebrowser import askopendirname, askopenfilename
 from dearpygui.dearpygui import configure_item
 
-
 # Variabili per il controllo della frequenza di aggiornamento della UI
 UI_UPDATE_INTERVAL = 0.1  # Intervallo in secondi per aggiornare l'interfaccia utente
 last_ui_update_time = 0  # Timestamp dell'ultimo aggiornamento UI
@@ -47,6 +46,7 @@ PORT_ATTESA_CHIAMATE = 12348
 SERVER_IP = "192.168.1.7" #ip server a cui collegarsi
 DEFAULT_PORT = 12345
 BUFFER_SIZE = 4096  # Aumentato da 1024 per migliorare la stabilità
+call_requests_thread = None
 
 dpg.create_context()
 dpg.create_viewport(title='Socket Chat', width=950, height=800)
@@ -74,6 +74,7 @@ server_started = False
 nome_utente_personale = ""
 ftp_server = None
 ftp_client = None
+termina_thread_listen_for_calls = True
 
 # Variabile globale per tracciare lo stato
 file_selection_in_progress = False
@@ -211,7 +212,7 @@ def registrati():
 
 
 def login():
-    global client_socket, server_started, nome_utente_personale
+    global client_socket, server_started, nome_utente_personale, call_requests_thread
     username = dpg.get_value("username")
     password = dpg.get_value("password")
 
@@ -470,13 +471,14 @@ def notifica_chiamata(chiChiama, client):
 
 
 def listen_for_call_request(socket_attesa_chiamate):
+    global termina_thread_listen_for_calls
     """
     Thread che ascolta le richieste di chiamata in arrivo.
     Gestisce le connessioni e notifica l'utente quando arriva una chiamata.
     """
     print(f"Avvio thread ascolto chiamate su porta {PORT_CHIAMATE}")
 
-    while True:
+    while termina_thread_listen_for_calls:
         try:
             # Se c'è già una chiamata in corso, metti in pausa questo thread
             if 'chiamata_in_corso' in globals() and chiamata_in_corso:
@@ -1897,16 +1899,18 @@ def videochiama_privato(is_you_calling):  # se sei tu a chiamare allora t aspett
         dpg.configure_item("btn_chiama_privato", enabled=True)
         dpg.configure_item("btn_videochiama_privato", enabled=True)
 
+
 def mostra_finestra_chiamata(risposta):
     """
     Mostra la finestra di chiamata in base alla risposta ricevuta.
+    Layout migliorato con frame video affiancati orizzontalmente e pulsanti ingranditi.
 
     Risposte possibili:
     - "ACCEPTED": Chiamata accettata, mostra finestra completa
     - "REFUSED": Chiamata rifiutata
     - "UNREACHABLE", "TIMEOUT", "ERROR": Problemi di connessione
     """
-    global utente_in_chiamata
+    global utente_in_chiamata, call_requests_thread
 
     # Debug per verificare che la funzione venga chiamata
     print(f"mostra_finestra_chiamata chiamata con risposta: {risposta}, utente: {utente_in_chiamata}")
@@ -1916,9 +1920,6 @@ def mostra_finestra_chiamata(risposta):
         dpg.delete_item("finestra_chiamata")
 
     # Se esiste già un registro texture, eliminiamolo
-    if dpg.does_item_exist("registro_chiamata"):
-        dpg.delete_item("registro_chiamata")
-
     if dpg.does_item_exist("registro_chiamata"):
         dpg.delete_item("registro_chiamata")
 
@@ -1973,10 +1974,22 @@ def mostra_finestra_chiamata(risposta):
         dpg.configure_item("btn_chiama_privato", enabled=True)
         return
 
-    # Per chiamate accettate, mostra la finestra completa
+    if call_requests_thread:
+        termina_thread_listen_for_calls = True
+        call_requests_thread = None
+
+    # Per chiamate accettate, mostra la finestra completa con layout migliorato
     try:
-        call_window_width = 400
-        call_window_height = is_video and 500 or 200  # Altezza ridotta se non è una videochiamata
+        # Nuove dimensioni per avere i video affiancati
+        # Per videochiamate: finestra più larga per contenere i due video affiancati
+        # Per chiamate solo audio: finestra più piccola
+        if is_video:
+            call_window_width = 660  # Sufficiente per 2 video affiancati (320*2 + margini)
+            call_window_height = 380  # Altezza singolo video + controlli + margini
+        else:
+            call_window_width = 400  # Finestra più piccola per solo audio
+            call_window_height = 180  # Altezza ridotta per solo audio
+
         call_window_pos = [viewport_width // 2 - call_window_width // 2, viewport_height // 2 - call_window_height // 2]
 
         with dpg.window(label=f"Chiamata con {utente_in_chiamata}", tag="finestra_chiamata",
@@ -1989,7 +2002,7 @@ def mostra_finestra_chiamata(risposta):
                     # Texture per il video del mittente (tu)
                     dpg.add_raw_texture(
                         width=320, height=240,
-                        default_value=np.zeros(320 * 240 * 3, dtype=np.float32),  # Texture nera iniziale
+                        default_value=np.zeros(320 * 240 * 3, dtype=np.float32),
                         format=dpg.mvFormat_Float_rgb,
                         tag="texture_mittente"
                     )
@@ -1997,71 +2010,100 @@ def mostra_finestra_chiamata(risposta):
                     # Texture per il video del destinatario
                     dpg.add_raw_texture(
                         width=320, height=240,
-                        default_value=np.zeros(320 * 240 * 3, dtype=np.float32),  # Texture nera iniziale
+                        default_value=np.zeros(320 * 240 * 3, dtype=np.float32),
                         format=dpg.mvFormat_Float_rgb,
                         tag="texture_destinatario"
                     )
 
-                # Collega le immagini alle texture
-                dpg.add_image(texture_tag="texture_mittente", tag="video_mittente", width=320, height=240)
-                dpg.add_separator()
-                dpg.add_image(texture_tag="texture_destinatario", tag="video_destinatario", width=320, height=240)
+                # Gruppo orizzontale per i video affiancati
+                with dpg.group(horizontal=True):
+                    # Video locale
+                    with dpg.group():
+                        dpg.add_text("Tu", color=[200, 200, 200])
+                        dpg.add_image(texture_tag="texture_mittente", tag="video_mittente", width=320, height=240)
+
+                    # Piccolo spazio tra i video
+                    dpg.add_spacer(width=10)
+
+                    # Video remoto
+                    with dpg.group():
+                        dpg.add_text(f"{utente_in_chiamata}", color=[200, 200, 200])
+                        dpg.add_image(texture_tag="texture_destinatario", tag="video_destinatario", width=320,
+                                      height=240)
 
             # Aggiungi informazioni sulla chiamata
             dpg.add_text(f"In chiamata con: {utente_in_chiamata}", color=[255, 255, 255])
             dpg.add_text("Stato: Connesso", color=[100, 255, 100])
             dpg.add_separator()
 
-            # Controlli della chiamata - centrati
-            button_width = 120
-            spacing = 10
-            total_buttons_width = 3 * button_width + 2 * spacing
-            left_margin = (call_window_width - total_buttons_width) // 2
-
+            # Controlli della chiamata con pulsanti più grandi e proporzionati
             dpg.add_spacer(height=10)
 
-            # Aggiungi i pulsanti centrati orizzontalmente
-            dpg.add_spacer(width=left_margin)
-
-            # Pulsante Termina (rosso)
-            with dpg.theme() as termina_theme:
-                with dpg.theme_component(dpg.mvButton):
-                    dpg.add_theme_color(dpg.mvThemeCol_Button, [150, 40, 40])  # Rosso normale
-                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [180, 60, 60])  # Rosso hover
-                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [120, 30, 30])  # Rosso cliccato
-                    dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
-
-            dpg.add_button(label="Termina", tag="btn_termina_chiamata", width=button_width,
-                           callback=termina_chiamata)
-            dpg.bind_item_theme(dpg.last_item(), termina_theme)
-
-            # Pulsante Video (blu) - solo per videochiamate
+            # Calcola dimensioni pulsanti in base alla finestra
             if is_video:
-                with dpg.theme() as video_theme:
+                button_count = 3  # Termina, Video, Audio
+                button_width = 190  # Pulsanti più grandi
+                button_height = 50  # Altezza aumentata
+                spacing = 20
+                total_width = button_count * button_width + (button_count - 1) * spacing
+                left_margin = (call_window_width - total_width) // 2
+            else:
+                button_count = 2  # Termina, Audio
+                button_width = 190  # Pulsanti più grandi
+                button_height = 50  # Altezza aumentata
+                spacing = 20
+                total_width = button_count * button_width + (button_count - 1) * spacing
+                left_margin = (call_window_width - total_width) // 2
+
+            # Centra i pulsanti orizzontalmente
+            with dpg.group(horizontal=True):
+                # Aggiungi margine a sinistra per centrare
+                dpg.add_spacer(width=left_margin)
+
+                # Pulsante Termina (rosso)
+                with dpg.theme() as termina_theme:
                     with dpg.theme_component(dpg.mvButton):
-                        dpg.add_theme_color(dpg.mvThemeCol_Button, [40, 80, 150])  # Blu normale
-                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [60, 100, 180])  # Blu hover
-                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [30, 60, 120])  # Blu cliccato
+                        dpg.add_theme_color(dpg.mvThemeCol_Button, [150, 40, 40])  # Rosso normale
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [180, 60, 60])  # Rosso hover
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [120, 30, 30])  # Rosso cliccato
                         dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
 
-                video_label = "Disattiva Video" if is_video_on else "Attiva Video"
-                dpg.add_button(label=video_label, tag="btn_video", width=button_width, callback=attiva_disattiva_video)
-                dpg.bind_item_theme(dpg.last_item(), video_theme)
+                dpg.add_button(label="Termina", tag="btn_termina_chiamata", width=button_width, height=button_height,
+                               callback=termina_chiamata)
+                dpg.bind_item_theme(dpg.last_item(), termina_theme)
 
+                # Spazio tra i pulsanti
                 dpg.add_spacer(width=spacing)
 
-            # Pulsante Audio (verde)
-            with dpg.theme() as audio_theme:
-                with dpg.theme_component(dpg.mvButton):
-                    dpg.add_theme_color(dpg.mvThemeCol_Button, [46, 120, 50])  # Verde normale
-                    dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [66, 150, 70])  # Verde hover
-                    dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [36, 100, 40])  # Verde cliccato
-                    dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+                # Pulsante Video (blu) - solo per videochiamate
+                if is_video:
+                    with dpg.theme() as video_theme:
+                        with dpg.theme_component(dpg.mvButton):
+                            dpg.add_theme_color(dpg.mvThemeCol_Button, [40, 80, 150])  # Blu normale
+                            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [60, 100, 180])  # Blu hover
+                            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [30, 60, 120])  # Blu cliccato
+                            dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
 
-            audio_label = "Disattiva Audio" if is_audio_on else "Attiva Audio"
-            dpg.add_button(label=audio_label, tag="btn_audio", width=button_width,
-                           callback=attiva_disattiva_audio)
-            dpg.bind_item_theme(dpg.last_item(), audio_theme)
+                    video_label = "Disattiva Video" if is_video_on else "Attiva Video"
+                    dpg.add_button(label=video_label, tag="btn_video", width=button_width, height=button_height,
+                                   callback=attiva_disattiva_video)
+                    dpg.bind_item_theme(dpg.last_item(), video_theme)
+
+                    # Spazio tra i pulsanti
+                    dpg.add_spacer(width=spacing)
+
+                # Pulsante Audio (verde)
+                with dpg.theme() as audio_theme:
+                    with dpg.theme_component(dpg.mvButton):
+                        dpg.add_theme_color(dpg.mvThemeCol_Button, [46, 120, 50])  # Verde normale
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [66, 150, 70])  # Verde hover
+                        dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [36, 100, 40])  # Verde cliccato
+                        dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+
+                audio_label = "Disattiva Audio" if is_audio_on else "Attiva Audio"
+                dpg.add_button(label=audio_label, tag="btn_audio", width=button_width, height=button_height,
+                               callback=attiva_disattiva_audio)
+                dpg.bind_item_theme(dpg.last_item(), audio_theme)
 
         print(f"Finestra di chiamata creata per {utente_in_chiamata}, tipo: {risposta}")
     except Exception as e:
@@ -2070,19 +2112,37 @@ def mostra_finestra_chiamata(risposta):
         dpg.configure_item("btn_videochiama_privato", enabled=True)
         dpg.configure_item("btn_chiama_privato", enabled=True)
 
+
+# Funzioni complementari che devono essere aggiornate per mantenere la coerenza
+
 def attiva_disattiva_video():
+    """Attiva o disattiva la webcam durante una videochiamata."""
     global is_video_on
-    if is_video_on:
-        is_video_on = False
-    else:
-        is_video_on = True
+
+    # Inverti lo stato del video
+    is_video_on = not is_video_on
+
+    # Aggiorna l'etichetta del pulsante
+    if dpg.does_item_exist("btn_video"):
+        new_label = "Disattiva Video" if is_video_on else "Attiva Video"
+        dpg.set_item_label("btn_video", new_label)
+
+    print(f"Video {'attivato' if is_video_on else 'disattivato'}")
+
 
 def attiva_disattiva_audio():
+    """Attiva o disattiva il microfono durante una chiamata."""
     global is_audio_on
-    if is_audio_on:
-        is_audio_on = False
-    else:
-        is_audio_on = True
+
+    # Inverti lo stato dell'audio
+    is_audio_on = not is_audio_on
+
+    # Aggiorna l'etichetta del pulsante
+    if dpg.does_item_exist("btn_audio"):
+        new_label = "Disattiva Audio" if is_audio_on else "Attiva Audio"
+        dpg.set_item_label("btn_audio", new_label)
+
+    print(f"Audio {'attivato' if is_audio_on else 'disattivato'}")
 
 
 def aggiorna_video_remoto(frame_remoto):
@@ -2342,7 +2402,17 @@ def termina_chiamata():
         except:
             print("Errore nella chiusura del socket")
 
-        socket_chiamata = None
+        finally:
+            socket_attesa_chiamate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_attesa_chiamate.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            socket_attesa_chiamate.settimeout(1.0)  # Socket non bloccante
+
+            # Legati a PORT_CHIAMATE (non PORT_ATTESA_CHIAMATE)
+            socket_attesa_chiamate.bind(("0.0.0.0", PORT_CHIAMATE))
+            socket_attesa_chiamate.listen(1)
+
+            termina_thread_listen_for_calls = True
+            call_requests_thread = threading.Thread(target=listen_for_call_request, args=(socket_attesa_chiamate,))
 
     # Rilascia risorse audio
     if audioStream:
