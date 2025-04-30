@@ -14,7 +14,7 @@ from pyftpdlib.servers import FTPServer
 import platform
 import subprocess
 import time
-
+import re  # Aggiungi qui
 
 #import per le chiamate e le videochiamate
 import pyaudio # con questo modulo gestisco l'audio in input e in output
@@ -1045,6 +1045,150 @@ def detect_mobile_hotspot(ip):
         print(f"Errore nel rilevamento hotspot: {e}")
 
     return False
+
+
+def videocall(ip):
+    """
+    Inizia una videochiamata con l'utente all'IP specificato.
+    Gestisce correttamente gli errori e mantiene lo stato dell'interfaccia.
+    """
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+
+    # Disabilita immediatamente i pulsanti per evitare chiamate multiple
+    dpg.configure_item("btn_videochiama_privato", enabled=False)
+    dpg.configure_item("btn_chiama_privato", enabled=False)
+
+    try:
+        is_video = True  # Videochiamata (audio + video)
+        utente_in_chiamata = username_client_chat_corrente
+
+        print(f"Videochiamata in corso verso IP: {ip}, porta: {PORT_CHIAMATE}")
+        socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket_chiamata.settimeout(5)  # Timeout più breve di 5 secondi
+        socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)  # Buffer di ricezione grande
+        socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)  # Buffer di invio grande
+        socket_chiamata.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # Disattiva Nagle's algorithm
+        socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)  # Imposta keepalive
+
+        # Tenta la connessione
+        try:
+            socket_chiamata.connect((ip, PORT_CHIAMATE))
+            print(f"Connessione stabilita con {ip}:{PORT_CHIAMATE}")
+        except ConnectionRefusedError:
+            print(f"Connessione rifiutata da {ip}:{PORT_CHIAMATE}")
+            mostra_finestra_chiamata("UNREACHABLE")
+            termina_chiamata()
+            return
+        except socket.timeout:
+            print(f"Timeout nella connessione a {ip}:{PORT_CHIAMATE}")
+            mostra_finestra_chiamata("TIMEOUT")
+            termina_chiamata()
+            return
+        except Exception as e:
+            print(f"Errore di connessione: {e}")
+            mostra_finestra_chiamata("ERROR")
+            termina_chiamata()
+            return
+
+        # Invia richiesta di chiamata - IMPORTANTE: Nome mittente
+        request = f"CALLREQUEST:{nome_utente_personale}:{is_video}"
+        print(f"Invio richiesta: {request}")
+        socket_chiamata.send(request.encode('utf-8'))
+
+        # Attendi risposta
+        try:
+            response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
+            print(f"Risposta ricevuta: {response}")
+        except socket.timeout:
+            print("Timeout in attesa di risposta alla richiesta di videochiamata")
+            mostra_finestra_chiamata("TIMEOUT")
+            termina_chiamata()
+            return
+        except Exception as e:
+            print(f"Errore nella ricezione della risposta: {e}")
+            mostra_finestra_chiamata("ERROR")
+            termina_chiamata()
+            return
+
+        if response == "CALLREQUEST:ACCEPT":
+            chiamata_in_corso = True
+
+            # Inizializza PyAudio con impostazioni ottimizzate
+            p = pyaudio.PyAudio()
+            min_buffer = CHUNK
+
+            audioStream = p.open(
+                format=FORMAT,
+                rate=RATE,
+                channels=CHANNEL,
+                input=True,
+                output=True,
+                frames_per_buffer=min_buffer,
+                input_host_api_specific_stream_info=get_low_latency_settings(),
+                output_host_api_specific_stream_info=get_low_latency_settings()
+            )
+
+            print("Stream audio inizializzato per videochiamata")
+
+            # Inizializza VideoCapture con ottimizzazioni
+            # Apri la webcam con un buffer minimo per ridurre la latenza
+            VideoCapture = cv2.VideoCapture(0)
+
+            # Imposta parametri per bassa latenza
+            VideoCapture.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Usa un solo frame di buffer
+
+            # Imposta risoluzione più bassa per hotspot mobile
+            is_mobile_hotspot = detect_mobile_hotspot(ip)
+
+            if is_mobile_hotspot:
+                # Risoluzione ridotta per connessioni deboli
+                VideoCapture.set(cv2.CAP_PROP_FRAME_WIDTH, 160)
+                VideoCapture.set(cv2.CAP_PROP_FRAME_HEIGHT, 120)
+                frame_interval = 0.1  # 10 FPS per risparmiare banda
+                print("Rilevata connessione hotspot, risoluzione ridotta")
+            else:
+                # Risoluzione normale
+                VideoCapture.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+                VideoCapture.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+                frame_interval = 0.05  # 20 FPS
+
+            # Verifica che la webcam sia stata aperta correttamente
+            if not VideoCapture.isOpened():
+                print("Errore: impossibile aprire la webcam")
+                # Continua comunque con solo audio
+            else:
+                print("Webcam inizializzata con successo, latenza ridotta")
+
+                # Avvia i thread con priorità
+                video_thread = threading.Thread(target=gestisci_video)
+                video_thread.daemon = True
+                video_thread.start()
+
+            # Avvia thread audio
+            audio_thread = threading.Thread(target=gestisci_audio)
+            audio_thread.daemon = True
+            audio_thread.start()
+
+            # Mostra finestra di chiamata
+            # Piccolo ritardo per garantire che i thread siano avviati
+            time.sleep(0.05)
+            mostra_finestra_chiamata("ACCEPTED")
+
+        else:
+            print(f"Videochiamata rifiutata: {response}")
+            mostra_finestra_chiamata("REFUSED")
+            termina_chiamata()
+
+    except Exception as e:
+        print(f"Errore generale durante la videochiamata: {e}")
+        mostra_finestra_chiamata("ERROR")
+        termina_chiamata()
+    finally:
+        # Riabilita i pulsanti di chiamata in ogni caso
+        if not chiamata_in_corso:
+            dpg.configure_item("btn_videochiama_privato", enabled=True)
+            dpg.configure_item("btn_chiama_privato", enabled=True)
+
 
 def download_private_file(sender, filename, timestamp, notification_message):
     """Scarica un file inviato in una chat privata"""
