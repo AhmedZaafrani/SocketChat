@@ -39,7 +39,7 @@ PORT_ATTESA_CHIAMATE = 12348
 
 # Altre costanti
 
-SERVER_IP = "192.168.1.7" #ip server a cui collegarsi
+SERVER_IP = "172.20.10.3" #ip server a cui collegarsi
 DEFAULT_PORT = 12345
 BUFFER_SIZE = 1024
 
