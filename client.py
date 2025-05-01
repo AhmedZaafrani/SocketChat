@@ -39,6 +39,10 @@ FORMAT = pyaudio.paInt16
 CHANNEL = 1
 RATE = 44100 # valore che consiglia la documentazione
 PORT_CHIAMATE = 12347
+PORT_INVIO_AUDIO = 12349
+PORT_INVIO_VIDEO = 12350
+PORT_RICEZIONE_AUDIO = 12351
+PORT_RICEZIONE_VIDEO = 12352
 PORT_ATTESA_CHIAMATE = 12348
 
 # Altre costanti
@@ -55,6 +59,10 @@ dpg.create_viewport(title='Socket Chat', width=950, height=800)
 
 chiamata_in_corso = False
 socket_chiamata = None
+socket_chiamata_invio_audio = None
+socket_chiamata_invio_video = None
+socket_chiamata_ricezione_audio = None
+socket_chiamata_ricezione_video = None
 is_video = False
 is_audio_on = True
 is_video_on = True
@@ -67,6 +75,8 @@ ip_chiamata_destinatario = ""
 # altre variabili globali
 
 chatlog_lock = threading.Lock()
+lock_audio = threading.Lock()
+lock_video = threading.Lock()
 chatlog = ""
 download_folders = {}  # username -> cartella di download per la chat
 client_socket = None
@@ -299,7 +309,7 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
     """
     Accetta una chiamata in arrivo e inizializza le risorse audio/video.
     """
-    global socket_chiamata, chiamata_in_corso, p, audioStream, VideoCapture, is_video, utente_in_chiamata
+    global socket_chiamata, chiamata_in_corso, p, audioStream, VideoCapture, is_video, utente_in_chiamata, socket_chiamata_invio_audio, socket_chiamata_invio_video, socket_chiamata_ricezione_audio, socket_chiamata_ricezione_video
 
     try:
         print(f"Accettando chiamata da {chiChiama}, video={is_videochiamata}")
@@ -317,6 +327,67 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
         is_video = is_videochiamata
         utente_in_chiamata = chiChiama
 
+        socket_chiamata_invio_audio = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        socket_chiamata_invio_audio.settimeout(1.0)  # Socket non bloccante
+
+        socket_chiamata_ricezione_audio = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        socket_chiamata_ricezione_audio.settimeout(1.0)  # Socket non bloccante
+
+        if is_videochiamata:
+            socket_chiamata_invio_video = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_chiamata_invio_video.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            socket_chiamata_invio_video.settimeout(1.0)  # Socket non bloccante
+
+            socket_chiamata_ricezione_video = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_chiamata_ricezione_video.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            socket_chiamata_ricezione_video.settimeout(1.0)  # Socket non bloccante
+
+        socket_comandi_output = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket_comandi_output.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        socket_comandi_output.settimeout(1.0)  # Socket non bloccante
+
+        socket_comandi_input = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket_comandi_input.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        socket_comandi_input.settimeout(1.0)  # Socket non bloccante
+
+        socket_chiamata_invio_audio.bind(("0.0.0.0", PORT_INVIO_AUDIO))
+        socket_chiamata_invio_audio.listen(1)
+
+        socket_chiamata_ricezione_audio.bind(("0.0.0.0", PORT_RICEZIONE_AUDIO))
+        socket_chiamata_ricezione_audio.listen(1)
+
+        if is_videochiamata:
+            socket_chiamata_invio_video.bind(("0.0.0.0", PORT_INVIO_VIDEO))
+            socket_chiamata_invio_video.listen(1)
+
+            socket_chiamata_ricezione_video.bind(("0.0.0.0", PORT_RICEZIONE_VIDEO))
+            socket_chiamata_ricezione_video.listen(1)
+
+        socket_comandi_input.bind(("0.0.0.0", PORT_RICEZIONE_COMANDI))
+        socket_comandi_input.listen(1)
+
+        socket_comandi_output.bind(("0.0.0.0", PORT_INVIO_COMANDI))
+        socket_comandi_output.listen(1)
+
+        socket_invio_audio = None
+        socket_invio_video = None
+        socket_ricezione_audio = None
+        socket_ricezione_video = None
+
+        while socket_invio_audio is None:
+            socket_invio_audio, address = socket_chiamata_invio_audio.accept()
+
+        while socket_ricezione_audio is None:
+            socket_ricezione_audio, address = socket_chiamata_ricezione_audio.accept()
+
+        while socket_invio_video is None:
+            socket_invio_video, address = socket_chiamata_invio_video.accept()
+
+        while socket_ricezione_video is None:
+            socket_ricezione_video, address = socket_chiamata_ricezione_video.accept()
+
         # Inizializza PyAudio
         p = pyaudio.PyAudio()
         audioStream = p.open(
@@ -330,10 +401,15 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
 
         print("Stream audio inizializzato correttamente")
 
-        # Avvia thread audio
-        audio_thread = threading.Thread(target=gestisci_audio)
-        audio_thread.daemon = True
-        audio_thread.start()
+        # Avvia thread invio audio
+        audio_invio_thread = threading.Thread(target=gestisci_invio_audio)
+        audio_invio_thread.daemon = True
+        audio_invio_thread.start()
+
+        # Avvia thread ricezioneaudio
+        audio_ricezione_thread = threading.Thread(target=gestisci_ricezione_audio)
+        audio_ricezione_thread.daemon = True
+        audio_ricezione_thread.start()
 
         # Se è una videochiamata, inizializza anche il video
         if is_videochiamata:
@@ -345,9 +421,15 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
                 print("Errore: impossibile aprire la webcam")
             else:
                 print("Webcam inizializzata con successo")
-                video_thread = threading.Thread(target=gestisci_video)
-                video_thread.daemon = True
-                video_thread.start()
+
+                # Avvia i thread con priorità
+                video_invio_thread = threading.Thread(target=gestisci_invio_video)
+                video_invio_thread.daemon = True
+                video_invio_thread.start()
+
+                video_ricezione_thread = threading.Thread(target=gestisci_ricezione_video)
+                video_ricezione_thread.daemon = True
+                video_ricezione_thread.start()
 
         # Utilizziamo un brevissimo timeout per dare tempo ai thread di avviarsi
         time.sleep(0.1)
@@ -378,7 +460,7 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
             socket_chiamata = None
 
         # In caso di errore, termina immediatamente la chiamata
-        termina_chiamata()
+        termina_chiamata(True)
 
 
 def rifiuta_chiamata(chiChiama, client):
@@ -520,11 +602,6 @@ def listen_for_call_request(socket_attesa_chiamate):
 
                     # Mostra notifica di chiamata in arrivo
                     notifica_chiamata(mittente, client)
-
-                elif len(request_keys) >= 1 and request_keys[0] == "ENDCALL":
-                    # Gestisce la richiesta di terminazione della chiamata
-                    print("Ricevuta richiesta di terminazione chiamata")
-                    termina_chiamata()
                 else:
                     print(f"Formato dati non riconosciuto: {data}")
                     client.close()
@@ -766,7 +843,7 @@ def call(ip):
     Inizia una chiamata audio con l'utente all'IP specificato.
     Gestisce correttamente gli errori e mantiene lo stato dell'interfaccia.
     """
-    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata, socket_chiamata_invio_video, socket_chiamata_invio_audio
 
     # Disabilita immediatamente i pulsanti per evitare chiamate multiple
     dpg.configure_item("btn_videochiama_privato", enabled=False)
@@ -829,6 +906,81 @@ def call(ip):
             return
 
         if response == "CALLREQUEST:ACCEPT":
+
+            socket_comandi_input = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_comandi_input.settimeout(5)  # Timeout più breve di 5 secondi
+            socket_comandi_input.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF,65536)  # Buffer di ricezione più grande
+            socket_comandi_input.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,65536)  # Buffer di invio più grande
+
+            comandi_input_chiamata_thread = threading.Thread(target=gestisci_comandi_input_chiamata)
+            comandi_input_chiamata_thread.daemon = True
+            comandi_input_chiamata_thread.start()
+
+            socket_comandi_output = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_comandi_output.settimeout(5)  # Timeout più breve di 5 secondi
+            socket_comandi_output.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)  # Buffer di ricezione più grande
+            socket_comandi_output.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)  # Buffer di invio più grande
+
+            socket_chiamata_invio_audio = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_chiamata_invio_audio.settimeout(5)  # Timeout più breve di 5 secondi
+            socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)  # Buffer di ricezione più grande
+            socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)  # Buffer di invio più grande
+
+            socket_chiamata_ricezione_audio = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_chiamata_ricezione_audio.settimeout(5)  # Timeout più breve di 5 secondi
+            socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF,65536)  # Buffer di ricezione più grande
+            socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,65536)  # Buffer di invio più grande
+
+            # Attiva la modalità no-delay per ridurre la latenza
+            socket_chiamata_invio_audio.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+            # Imposta keepalive per mantenere la connessione attiva
+            socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+            # Attiva la modalità no-delay per ridurre la latenza
+            socket_chiamata_ricezione_audio.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+            # Imposta keepalive per mantenere la connessione attiva
+            socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+            try:
+                socket_chiamata_invio_audio.connect((ip, PORT_INVIO_AUDIO))
+                print(f"Connessione stabilita con {ip}:{PORT_INVIO_AUDIO}")
+            except ConnectionRefusedError:
+                print(f"Connessione rifiutata da {ip}:{PORT_INVIO_AUDIO}")
+                mostra_finestra_chiamata("UNREACHABLE")
+                termina_chiamata()
+                return
+            except socket.timeout:
+                print(f"Timeout nella connessione a {ip}:{PORT_INVIO_AUDIO}")
+                mostra_finestra_chiamata("TIMEOUT")
+                termina_chiamata()
+                return
+            except Exception as e:
+                print(f"Errore di connessione: {e}")
+                mostra_finestra_chiamata("ERROR")
+                termina_chiamata()
+                return
+
+            try:
+                socket_chiamata_ricezione_audio.connect((ip, PORT_RICEZIONE_AUDIO))
+                print(f"Connessione stabilita con {ip}:{PORT_RICEZIONE_AUDIO}")
+            except ConnectionRefusedError:
+                print(f"Connessione rifiutata da {ip}:{PORT_RICEZIONE_AUDIO}")
+                mostra_finestra_chiamata("UNREACHABLE")
+                termina_chiamata()
+                return
+            except socket.timeout:
+                print(f"Timeout nella connessione a {ip}:{PORT_RICEZIONE_AUDIO}")
+                mostra_finestra_chiamata("TIMEOUT")
+                termina_chiamata()
+                return
+            except Exception as e:
+                print(f"Errore di connessione: {e}")
+                mostra_finestra_chiamata("ERROR")
+                termina_chiamata()
+                return
+
             chiamata_in_corso = True
 
             # Inizializza PyAudio con impostazioni ottimizzate per la latenza
@@ -899,6 +1051,24 @@ def call(ip):
             dpg.configure_item("btn_videochiama_privato", enabled=True)
             dpg.configure_item("btn_chiama_privato", enabled=True)
 
+def gestisci_comandi_input_chiamata():
+    global socket_comandi_input
+    while socket_chiamata:
+        try:
+            comando = socket_comandi_input.recv(BUFFER_SIZE).decode('utf-8')
+            if comando == "TERMINA":
+                termina_chiamata()
+                break
+        except Exception as e:
+            print(f"Errore nell'input comando chiamata: {e}")
+
+def gestisci_comandi_output_chiamata():
+    global socket_comandi_output
+    try:
+        comando = "TERMINA"
+        socket_comandi_output.send(comando.encode('utf-8'))
+    except Exception as e:
+        print(f"Errore nell'output comando chiamata: {e}")
 
 def debug_richiesta_ip(destinatario, is_video):
     """
@@ -1113,6 +1283,170 @@ def videocall(ip):
             return
 
         if response == "CALLREQUEST:ACCEPT":
+
+            comandi_chiamata_thread = threading.Thread(target=gestisci_comandi_chiamata)
+            comandi_chiamata_thread.daemon = True
+            comandi_chiamata_thread.start()
+
+            socket_chiamata_invio_audio = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_chiamata_invio_audio.settimeout(5)  # Timeout più breve di 5 secondi
+            socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF,65536)  # Buffer di ricezione più grande
+            socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,65536)  # Buffer di invio più grande
+
+
+            socket_chiamata_invio_video = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_chiamata_invio_video.settimeout(5)  # Timeout più breve di 5 secondi
+            socket_chiamata_invio_video.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF,65536)  # Buffer di ricezione più grande
+            socket_chiamata_invio_video.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,65536)  # Buffer di invio più grande
+
+            socket_chiamata_ricezione_audio = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_chiamata_ricezione_audio.settimeout(5)  # Timeout più breve di 5 secondi
+            socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF,65536)  # Buffer di ricezione più grande
+            socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,65536)  # Buffer di invio più grande
+
+            socket_chiamata_ricezione_video = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            socket_chiamata_ricezione_video.settimeout(5)  # Timeout più breve di 5 secondi
+            socket_chiamata_ricezione_video.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF,65536)  # Buffer di ricezione più grande
+            socket_chiamata_ricezione_video.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,65536)  # Buffer di invio più grande
+
+            # Attiva la modalità no-delay per ridurre la latenza
+            socket_chiamata_invio_audio.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+            # Imposta keepalive per mantenere la connessione attiva
+            socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+            # Attiva la modalità no-delay per ridurre la latenza
+            socket_chiamata_ricezione_audio.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+            # Imposta keepalive per mantenere la connessione attiva
+            socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+            # Attiva la modalità no-delay per ridurre la latenza
+            socket_chiamata_invio_video.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+            # Imposta keepalive per mantenere la connessione attiva
+            socket_chiamata_invio_video.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+            # Attiva la modalità no-delay per ridurre la latenza
+            socket_chiamata_ricezione_video.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+            # Imposta keepalive per mantenere la connessione attiva
+            socket_chiamata_ricezione_video.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+            try:
+                socket_chiamata_invio_audio.connect((ip, PORT_INVIO_AUDIO))
+                print(f"Connessione stabilita con {ip}:{PORT_INVIO_AUDIO}")
+            except ConnectionRefusedError:
+                print(f"Connessione rifiutata da {ip}:{PORT_INVIO_AUDIO}")
+                mostra_finestra_chiamata("UNREACHABLE")
+                termina_chiamata()
+                return
+            except socket.timeout:
+                print(f"Timeout nella connessione a {ip}:{PORT_INVIO_AUDIO}")
+                mostra_finestra_chiamata("TIMEOUT")
+                termina_chiamata()
+                return
+            except Exception as e:
+                print(f"Errore di connessione: {e}")
+                mostra_finestra_chiamata("ERROR")
+                termina_chiamata()
+                return
+
+            try:
+                socket_chiamata_ricezione_audio.connect((ip, PORT_RICEZIONE_AUDIO))
+                print(f"Connessione stabilita con {ip}:{PORT_RICEZIONE_AUDIO}")
+            except ConnectionRefusedError:
+                print(f"Connessione rifiutata da {ip}:{PORT_RICEZIONE_AUDIO}")
+                mostra_finestra_chiamata("UNREACHABLE")
+                termina_chiamata()
+                return
+            except socket.timeout:
+                print(f"Timeout nella connessione a {ip}:{PORT_RICEZIONE_AUDIO}")
+                mostra_finestra_chiamata("TIMEOUT")
+                termina_chiamata()
+                return
+            except Exception as e:
+                print(f"Errore di connessione: {e}")
+                mostra_finestra_chiamata("ERROR")
+                termina_chiamata()
+                return
+
+            try:
+                socket_chiamata_invio_audio.connect((ip, PORT_INVIO_AUDIO))
+                print(f"Connessione stabilita con {ip}:{PORT_INVIO_AUDIO}")
+            except ConnectionRefusedError:
+                print(f"Connessione rifiutata da {ip}:{PORT_INVIO_AUDIO}")
+                mostra_finestra_chiamata("UNREACHABLE")
+                termina_chiamata()
+                return
+            except socket.timeout:
+                print(f"Timeout nella connessione a {ip}:{PORT_INVIO_AUDIO}")
+                mostra_finestra_chiamata("TIMEOUT")
+                termina_chiamata()
+                return
+            except Exception as e:
+                print(f"Errore di connessione: {e}")
+                mostra_finestra_chiamata("ERROR")
+                termina_chiamata()
+                return
+
+            try:
+                socket_chiamata_ricezione_audio.connect((ip, PORT_RICEZIONE_AUDIO))
+                print(f"Connessione stabilita con {ip}:{PORT_RICEZIONE_AUDIO}")
+            except ConnectionRefusedError:
+                print(f"Connessione rifiutata da {ip}:{PORT_RICEZIONE_AUDIO}")
+                mostra_finestra_chiamata("UNREACHABLE")
+                termina_chiamata()
+                return
+            except socket.timeout:
+                print(f"Timeout nella connessione a {ip}:{PORT_RICEZIONE_AUDIO}")
+                mostra_finestra_chiamata("TIMEOUT")
+                termina_chiamata()
+                return
+            except Exception as e:
+                print(f"Errore di connessione: {e}")
+                mostra_finestra_chiamata("ERROR")
+                termina_chiamata()
+                return
+
+            try:
+                socket_chiamata_invio_video.connect((ip, PORT_INVIO_VIDEO))
+                print(f"Connessione stabilita con {ip}:{PORT_INVIO_VIDEO}")
+            except ConnectionRefusedError:
+                print(f"Connessione rifiutata da {ip}:{PORT_INVIO_VIDEO}")
+                mostra_finestra_chiamata("UNREACHABLE")
+                termina_chiamata()
+                return
+            except socket.timeout:
+                print(f"Timeout nella connessione a {ip}:{PORT_INVIO_VIDEO}")
+                mostra_finestra_chiamata("TIMEOUT")
+                termina_chiamata()
+                return
+            except Exception as e:
+                print(f"Errore di connessione: {e}")
+                mostra_finestra_chiamata("ERROR")
+                termina_chiamata()
+                return
+
+            try:
+                socket_chiamata_ricezione_video.connect((ip, PORT_RICEZIONE_VIDEO))
+                print(f"Connessione stabilita con {ip}:{PORT_RICEZIONE_VIDEO}")
+            except ConnectionRefusedError:
+                print(f"Connessione rifiutata da {ip}:{PORT_RICEZIONE_VIDEO}")
+                mostra_finestra_chiamata("UNREACHABLE")
+                termina_chiamata()
+                return
+            except socket.timeout:
+                print(f"Timeout nella connessione a {ip}:{PORT_RICEZIONE_VIDEO}")
+                mostra_finestra_chiamata("TIMEOUT")
+                termina_chiamata()
+                return
+            except Exception as e:
+                print(f"Errore di connessione: {e}")
+                mostra_finestra_chiamata("ERROR")
+                termina_chiamata()
+                return
+
             chiamata_in_corso = True
 
             # Inizializza PyAudio con impostazioni ottimizzate
@@ -1162,14 +1496,23 @@ def videocall(ip):
                 print("Webcam inizializzata con successo, latenza ridotta")
 
                 # Avvia i thread con priorità
-                video_thread = threading.Thread(target=gestisci_video)
-                video_thread.daemon = True
-                video_thread.start()
+                video_invio_thread = threading.Thread(target=gestisci_invio_video)
+                video_invio_thread.daemon = True
+                video_invio_thread.start()
 
-            # Avvia thread audio
-            audio_thread = threading.Thread(target=gestisci_audio)
-            audio_thread.daemon = True
-            audio_thread.start()
+                video_ricezione_thread = threading.Thread(target=gestisci_ricezione_video)
+                video_ricezione_thread.daemon = True
+                video_ricezione_thread.start()
+
+            # Avvia thread invio audio
+            audio_invio_thread = threading.Thread(target=gestisci_invio_audio)
+            audio_invio_thread.daemon = True
+            audio_invio_thread.start()
+
+            # Avvia thread ricezioneaudio
+            audio_ricezione_thread = threading.Thread(target=gestisci_ricezione_audio)
+            audio_ricezione_thread.daemon = True
+            audio_ricezione_thread.start()
 
             # Mostra finestra di chiamata
             # Piccolo ritardo per garantire che i thread siano avviati
@@ -2182,8 +2525,8 @@ def aggiorna_video_locale(frame):
         pass
 
 
-def gestisci_video():
-    global is_video, is_video_on, socket_chiamata
+def gestisci_invio_video():
+    global is_video, is_video_on, socket_chiamata, socket_chiamata_invio_video
 
     # Imposta alta priorità per questo thread
     set_thread_priority("video")
@@ -2193,7 +2536,7 @@ def gestisci_video():
     frame_interval = 0.033  # Circa 30 FPS
 
     try:
-        while is_video_on and socket_chiamata and chiamata_in_corso:
+        while is_video_on and socket_chiamata and chiamata_in_corso and socket_chiamata_invio_video:
             current_time = time.time()
 
             # Limitazione frame rate per ridurre carico CPU e rete
@@ -2227,69 +2570,77 @@ def gestisci_video():
             # Invia dimensione e dati del frame
             try:
                 size = len(data)
-                socket_chiamata.settimeout(0.1)  # Timeout breve per l'invio
-                socket_chiamata.send(struct.pack('!I', size) + data)
+                socket_chiamata_invio_video.settimeout(0.1)  # Timeout breve per l'invio
+                socket_chiamata_invio_video.send(struct.pack('!I', size) + data)
             except Exception as e:
                 print(f"Errore nell'invio del frame: {e}")
                 # Non interrompere il ciclo per un singolo errore
-
-            # Ricevi frame video
-            try:
-                socket_chiamata.settimeout(0.05)  # Timeout molto breve per non bloccare
-                size_data = socket_chiamata.recv(4)
-                if size_data:
-                    size = struct.unpack('!I', size_data)[0]
-
-                    # Limita la dimensione massima per sicurezza
-                    if size > 10000000:  # 1MB max
-                        continue
-
-                    frame_data = b''
-                    remaining = size
-
-                    # Loop di ricezione con timeout
-                    start_time = time.time()
-                    while len(frame_data) < size and time.time() - start_time < 0.1:  # Max 100ms per frame
-                        try:
-                            pacchetto = socket_chiamata.recv(min(remaining, 4096))
-                            if not pacchetto:
-                                break
-                            frame_data += pacchetto
-                            remaining -= len(pacchetto)
-                        except socket.timeout:
-                            # Se il timeout scade, passiamo al frame successivo
-                            break
-
-                    # Se abbiamo ricevuto tutti i dati, decodifica e mostra
-                    if len(frame_data) == size:
-                        try:
-                            # Decodifica il frame
-                            frame_remoto = cv2.imdecode(np.frombuffer(frame_data, dtype=np.uint8), cv2.IMREAD_COLOR)
-
-                            # Aggiorna UI solo se l'elemento esiste
-                            if dpg.does_item_exist("texture_destinatario"):
-                                aggiorna_video_remoto(frame_remoto)
-                        except Exception as e:
-                            print(f"Errore nella decodifica del frame: {e}")
-            except socket.timeout:
-                # Nessun dato disponibile, continua al frame successivo
-                pass
-            except Exception as e:
-                print(f"Errore nella ricezione video: {e}")
 
     except Exception as e:
         print(f"Errore nella gestione video: {e}")
         # Non terminare la chiamata, potrebbe essere solo audio
 
+def gestisci_ricezione_video():
+    global is_video, is_video_on, socket_chiamata, socket_chiamata_invio_audio, socket_chiamata_invio_video, socket_chiamata_ricezione_audio, socket_chiamata_ricezione_video
 
-def gestisci_audio():
+    # Imposta alta priorità per questo thread
+    set_thread_priority("video")
+
+    # Utilizzato per limitare la frequenza di aggiornamento del frame
+    last_frame_time = time.time()
+    frame_interval = 0.033  # Circa 30 FPS
+    try:
+        while is_video_on and socket_chiamata and chiamata_in_corso and socket_chiamata_ricezione_video:
+            socket_chiamata_ricezione_video.settimeout(0.05)  # Timeout molto breve per non bloccare
+            size_data = socket_chiamata_ricezione_video.recv(4)
+            if size_data:
+                size = struct.unpack('!I', size_data)[0]
+
+                # Limita la dimensione massima per sicurezza
+                if size > 10000000:  # 1MB max
+                    continue
+
+                frame_data = b''
+                remaining = size
+
+                # Loop di ricezione con timeout
+                start_time = time.time()
+                while len(frame_data) < size and time.time() - start_time < 0.1:  # Max 100ms per frame
+                    try:
+                        pacchetto = socket_chiamata_ricezione_video.recv(min(remaining, 4096))
+                        if not pacchetto:
+                            break
+                        frame_data += pacchetto
+                        remaining -= len(pacchetto)
+                    except socket.timeout:
+                        # Se il timeout scade, passiamo al frame successivo
+                        break
+
+                # Se abbiamo ricevuto tutti i dati, decodifica e mostra
+                if len(frame_data) == size:
+                    try:
+                        # Decodifica il frame
+                        frame_remoto = cv2.imdecode(np.frombuffer(frame_data, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+                        # Aggiorna UI solo se l'elemento esiste
+                        if dpg.does_item_exist("texture_destinatario"):
+                            aggiorna_video_remoto(frame_remoto)
+                    except Exception as e:
+                        print(f"Errore nella decodifica del frame: {e}")
+    except socket.timeout:
+        # Nessun dato disponibile, continua al frame successivo
+        pass
+    except Exception as e:
+        print(f"Errore nella ricezione video: {e}")
+
+def gestisci_invio_audio():
     """
     Funzione che gestisce lo streaming audio durante una chiamata.
     Sia invio che ricezione dell'audio.
     """
-    global chiamata_in_corso, socket_chiamata, audioStream, is_audio_on
+    global chiamata_in_corso, socket_chiamata, audioStream, is_audio_on, socket_chiamata_invio_audio
 
-    print("Avvio thread gestione audio")
+    print("Avvio thread gestione invio audio")
 
     # Imposta alta priorità per questo thread
     set_thread_priority("audio")
@@ -2300,7 +2651,7 @@ def gestisci_audio():
         return
 
     try:
-        # Imposta buffer per invio e ricezione
+        # Imposta buffer per invio
         buffer_size = CHUNK
         receive_buffer_size = CHUNK * 4  # Buffer più grande per la ricezione
 
@@ -2309,34 +2660,12 @@ def gestisci_audio():
             # Invio audio
             try:
                 if is_audio_on:
-                    # Leggi dati audio dal microfono
-                    audio_data = audioStream.read(buffer_size, exception_on_overflow=True)
+                    with lock_audio:
+                        # Leggi dati audio dal microfono
+                        audio_data = audioStream.read(buffer_size, exception_on_overflow=True)
                     if audio_data:
                         # Invia i dati audio
-                        socket_chiamata.send(audio_data)
-
-                # Ricezione audio
-                try:
-                    # Imposta un timeout molto breve per la ricezione per non bloccare
-                    socket_chiamata.settimeout(0.02)  # 20ms timeout
-
-                    # Ricevi dati audio
-                    audio_ricevuto = socket_chiamata.recv(receive_buffer_size)
-
-                    # Riproduci i dati audio se ci sono
-                    if audio_ricevuto and len(audio_ricevuto) > 0:
-                        audioStream.write(audio_ricevuto)
-
-                except socket.timeout:
-                    # Timeout normale, continua il loop
-                    pass
-                except Exception as e:
-                    print(f"Errore nella ricezione audio: {e}")
-                    if "Connessione in corso interrotta forzatamente dall'host remoto" in str(e):
-                        termina_chiamata()
-                        chiamata_in_corso = False
-                    # Non interrompere il loop per errori minori
-
+                        socket_chiamata_invio_audio.send(audio_data)
             except Exception as e:
                 print(f"Errore nell'invio audio: {e}")
                 if "Connessione interrotta dal software del computer host" in str(e):
@@ -2351,6 +2680,59 @@ def gestisci_audio():
     finally:
         print("Thread audio terminato")
 
+def gestisci_ricezione_audio():
+    """
+    Funzione che gestisce lo streaming audio durante una chiamata.
+    Sia invio che ricezione dell'audio.
+    """
+    global chiamata_in_corso, socket_chiamata, audioStream, is_audio_on, socket_chiamata_ricezione_audio
+
+    print("Avvio thread gestione ricezione audio")
+
+    # Imposta alta priorità per questo thread
+    set_thread_priority("audio")
+
+    # Verifica che lo stream audio sia inizializzato
+    if audioStream is None:
+        print("Errore: audioStream non inizializzato")
+        return
+
+    try:
+        # Imposta buffer per ricezione
+        buffer_size = CHUNK
+        receive_buffer_size = CHUNK * 4  # Buffer più grande per la ricezione
+
+        # Loop principale
+        while chiamata_in_corso:
+            # Ricezione audio
+            try:
+                # Imposta un timeout molto breve per la ricezione per non bloccare
+                socket_chiamata_ricezione_audio.settimeout(0.02)  # 20ms timeout
+
+                # Ricevi dati audio
+                audio_ricevuto = socket_chiamata_ricezione_audio.recv(receive_buffer_size)
+
+                # Riproduci i dati audio se ci sono
+                if audio_ricevuto and len(audio_ricevuto) > 0:
+                    with lock_audio:
+                        audioStream.write(audio_ricevuto)
+
+            except socket.timeout:
+                # Timeout normale, continua il loop
+                pass
+            except Exception as e:
+                print(f"Errore nella ricezione audio: {e}")
+                if "Connessione in corso interrotta forzatamente dall'host remoto" in str(e):
+                    termina_chiamata()
+                    chiamata_in_corso = False
+                # Non interrompere il loop per errori minori
+        # Micropausa per ridurre l'utilizzo della CPU senza impattare l'audio
+        time.sleep(0.0005)  # 0.5ms, praticamente impercettibile per l'audio
+
+    except Exception as e:
+        print(f"Errore critico nella gestione audio: {e}")
+    finally:
+        print("Thread audio terminato")
 
 def verifica_connettivita(ip, porta, timeout=2):
     """
@@ -2380,12 +2762,14 @@ def termina_chiamata():
     Termina la chiamata attiva, rilascia le risorse e ripristina l'interfaccia.
     Chiude correttamente tutte le risorse (socket, audio, video).
     """
-    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata, socket_chiamata_invio_video, socket_chiamata_ricezione_audio,socket_chiamata_invio_audio, socket_chiamata_ricezione_video
 
     print("Avvio terminazione chiamata...")
 
     # Prima di tutto, imposta lo stato come non in chiamata
     chiamata_in_corso = False
+
+    gestisci_comandi_output_chiamata() # dico al destinatario che termino la chiamata
 
     # Invia segnale di fine chiamata se possibile
     if socket_chiamata:
@@ -2400,7 +2784,35 @@ def termina_chiamata():
             socket_chiamata.close()
             print("Socket di chiamata chiuso")
         except:
-            print("Errore nella chiusura del socket")
+            print("Errore nella chiusura del socket chiamata")
+
+        try:
+            if socket_chiamata_invio_audio:
+                socket_chiamata_invio_audio.close()
+                print("Socket di invio audio chiuso")
+        except:
+            print("Errore nella chiusura del socket invio audio")
+
+        try:
+            if socket_chiamata_ricezione_audio:
+                socket_chiamata_ricezione_audio.close()
+                print("Socket di ricezione audio chiuso")
+        except:
+            print("Errore nella chiusura del socket ricezione audio")
+
+        try:
+            if socket_chiamata_invio_video:
+                socket_chiamata_invio_video.close()
+                print("Socket di ivnio video chiuso")
+        except:
+            print("Errore nella chiusura del socket invio video")
+
+        try:
+            if socket_chiamata_ricezione_video:
+                socket_chiamata_ricezione_video.close()
+                print("Socket di ricezione ricezione chiuso")
+        except:
+            print("Errore nella chiusura del socket ricezione video")
 
         finally:
             socket_attesa_chiamate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
