@@ -2861,7 +2861,6 @@ def termina_chiamata(from_error=False):
             print("VideoCapture rilasciato correttamente")
         except:
             pass  # Ignora errori
-        global VideoCapture  # Esplicitamente globale
         VideoCapture = None
 
     # Chiudi stream audio e PyAudio
@@ -2872,7 +2871,6 @@ def termina_chiamata(from_error=False):
             print("Stream audio chiuso correttamente")
         except:
             pass  # Ignora errori
-        global audioStream  # Esplicitamente globale
         audioStream = None
 
     if p:
@@ -2881,7 +2879,6 @@ def termina_chiamata(from_error=False):
             print("PyAudio terminato correttamente")
         except:
             pass  # Ignora errori
-        global p  # Esplicitamente globale
         p = None
 
     # Reimposta le variabili
