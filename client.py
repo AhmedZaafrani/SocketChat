@@ -960,53 +960,71 @@ def call(ip):
         except ConnectionRefusedError:
             print(f"Connessione rifiutata da {ip}:{PORT_CHIAMATE}")
             mostra_finestra_chiamata("UNREACHABLE")
-            termina_chiamata()
+            # Riabilita i pulsanti
+            dpg.configure_item("btn_videochiama_privato", enabled=True)
+            dpg.configure_item("btn_chiama_privato", enabled=True)
             return
         except socket.timeout:
             print(f"Timeout nella connessione a {ip}:{PORT_CHIAMATE}")
             mostra_finestra_chiamata("TIMEOUT")
-            termina_chiamata()
+            # Riabilita i pulsanti
+            dpg.configure_item("btn_videochiama_privato", enabled=True)
+            dpg.configure_item("btn_chiama_privato", enabled=True)
             return
         except Exception as e:
             print(f"Errore di connessione: {e}")
             mostra_finestra_chiamata("ERROR")
-            termina_chiamata()
-            return
-
-        request = f"CALLREQUEST:{nome_utente_personale}:{is_video}"
-        print(f"Invio richiesta: {request}")
-        socket_chiamata.send(request.encode('utf-8'))
-
-        # Attendi risposta con gestione migliorata del timeout
-        try:
-            socket_chiamata.settimeout(5)
-            response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
-            print(f"Risposta ricevuta: {response}")
-        except socket.timeout:
-            print("Timeout in attesa di risposta alla richiesta di chiamata")
-            mostra_finestra_chiamata("TIMEOUT")
-            # Chiudi il socket principale prima di terminare
-            try:
-                socket_chiamata.close()
-                socket_chiamata = None
-            except:
-                pass
-            # Riattiva i pulsanti
+            # Riabilita i pulsanti
             dpg.configure_item("btn_videochiama_privato", enabled=True)
             dpg.configure_item("btn_chiama_privato", enabled=True)
             return
 
+        # Invia richiesta di chiamata - IMPORTANTE: Nome mittente
+        request = f"CALLREQUEST:{nome_utente_personale}:{is_video}"
+        print(f"Invio richiesta: {request}")
+        socket_chiamata.send(request.encode('utf-8'))
+
+        # Attendi risposta con timeout - CORREZIONE QUI
+        try:
+            socket_chiamata.settimeout(5)
+            response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
+            print(f"Risposta ricevuta: {response}")
+
+            # Se la risposta è vuota, trattala come un timeout
+            if not response:
+                print("Risposta vuota ricevuta - probabile disconnessione")
+                socket_chiamata.close()
+                socket_chiamata = None
+                mostra_finestra_chiamata("TIMEOUT")
+                # Riabilita i pulsanti
+                dpg.configure_item("btn_videochiama_privato", enabled=True)
+                dpg.configure_item("btn_chiama_privato", enabled=True)
+                return
+
         except socket.timeout:
             print("Timeout in attesa di risposta alla richiesta di chiamata")
+            # Chiudi il socket e mostra errore
+            if socket_chiamata:
+                socket_chiamata.close()
+                socket_chiamata = None
             mostra_finestra_chiamata("TIMEOUT")
-            termina_chiamata(True)  # Passa True per evitare di ricreare il socket di ascolto
+            # Riabilita i pulsanti
+            dpg.configure_item("btn_videochiama_privato", enabled=True)
+            dpg.configure_item("btn_chiama_privato", enabled=True)
             return
         except Exception as e:
             print(f"Errore nella ricezione della risposta: {e}")
+            # Chiudi il socket e mostra errore
+            if socket_chiamata:
+                socket_chiamata.close()
+                socket_chiamata = None
             mostra_finestra_chiamata("ERROR")
-            termina_chiamata(True)  # Passa True per evitare di ricreare il socket di ascolto
+            # Riabilita i pulsanti
+            dpg.configure_item("btn_videochiama_privato", enabled=True)
+            dpg.configure_item("btn_chiama_privato", enabled=True)
             return
 
+        # Procedi solo se la risposta è positiva
         if response == "CALLREQUEST:ACCEPT":
             # Inizializza i socket ausiliari solo dopo l'accettazione
             socket_chiamata_invio_audio = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
