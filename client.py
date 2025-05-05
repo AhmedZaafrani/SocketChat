@@ -937,13 +937,17 @@ def listen_to_server():
     print("Thread di ascolto terminato")
 
 
-def call(ip): #ciao
+def call(ip): # vedi se ha pushato
     """
     Inizia una chiamata audio con l'utente all'IP specificato.
-    Gestisce correttamente gli errori e mantiene lo stato dell'interfaccia.
+    Versione migliorata con sincronizzazione e gestione errori avanzata.
     """
     global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
     global socket_chiamata_invio_audio, socket_chiamata_ricezione_audio, socket_comandi_input, socket_comandi_output
+    global ip_chiamata_destinatario
+
+    # Salva l'IP del destinatario per eventuali riconnessioni
+    ip_chiamata_destinatario = ip
 
     # Inizializza tutte le variabili dei socket a None all'inizio della funzione
     socket_comandi_output = None
@@ -979,7 +983,7 @@ def call(ip): #ciao
 
         # Inizializza il socket principale
         socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket_chiamata.settimeout(10)  # Aumenta il timeout a 10 secondi
+        socket_chiamata.settimeout(10)  # Timeout aumentato a 10 secondi
         socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)  # Buffer di ricezione più grande
         socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)  # Buffer di invio più grande
@@ -1018,7 +1022,7 @@ def call(ip): #ciao
 
         # Attendi risposta con timeout aumentato
         try:
-            socket_chiamata.settimeout(10)  # Aumenta il timeout a 10 secondi
+            socket_chiamata.settimeout(10)  # Timeout di 10 secondi
             response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
             print(f"Risposta ricevuta: {response}")
 
@@ -1058,7 +1062,66 @@ def call(ip): #ciao
 
         # Procedi solo se la risposta è positiva
         if response == "CALLREQUEST:ACCEPT":
-            # Inizializza i socket ausiliari solo dopo l'accettazione
+            # Inizializza PyAudio PRIMA di creare i socket di connessione
+            try:
+                # Inizializza PyAudio con impostazioni ottimizzate per la latenza
+                p = pyaudio.PyAudio()
+                min_buffer = CHUNK
+                audioStream = p.open(
+                    format=FORMAT,
+                    rate=RATE,
+                    channels=CHANNEL,
+                    input=True,
+                    output=True,
+                    frames_per_buffer=min_buffer,
+                    start=True,  # Avvia immediatamente lo stream
+                    input_host_api_specific_stream_info=get_low_latency_settings(),
+                    output_host_api_specific_stream_info=get_low_latency_settings()
+                )
+                print("Stream audio inizializzato con impostazioni a bassa latenza")
+            except Exception as e:
+                print(f"Errore nell'inizializzazione dello stream audio: {e}")
+                # Riprova con impostazioni standard
+                try:
+                    audioStream = p.open(
+                        format=FORMAT,
+                        rate=RATE,
+                        channels=CHANNEL,
+                        input=True,
+                        output=True,
+                        frames_per_buffer=CHUNK,
+                        start=True
+                    )
+                    print("Stream audio inizializzato con impostazioni standard")
+                except Exception as e2:
+                    print(f"Errore critico nell'inizializzazione audio: {e2}")
+                    socket_chiamata.close()
+                    socket_chiamata = None
+                    mostra_finestra_chiamata("ERROR")
+                    dpg.configure_item("btn_videochiama_privato", enabled=True)
+                    dpg.configure_item("btn_chiama_privato", enabled=True)
+                    return
+
+            # Aspetta un possibile messaggio di sincronizzazione
+            try:
+                socket_chiamata.settimeout(5.0)
+                sync_message = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
+                print(f"Messaggio di sincronizzazione ricevuto: {sync_message}")
+
+                # Verifica se il messaggio è di tipo SOCKET_READY
+                if not sync_message.startswith("SOCKET_READY:"):
+                    print(f"Messaggio di sincronizzazione inatteso: {sync_message}")
+                    # Continua comunque, potrebbe essere un client vecchio
+            except socket.timeout:
+                print("Nessun messaggio di sincronizzazione ricevuto, continuo comunque")
+            except Exception as e:
+                print(f"Errore nella ricezione del messaggio di sincronizzazione: {e}")
+                # Continua comunque, è solo un miglioramento opzionale
+
+            # Breve pausa prima di tentare la connessione ai socket ausiliari
+            time.sleep(0.5)
+
+            # Inizializza i socket ausiliari con impostazioni ottimizzate
             socket_chiamata_invio_audio = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             socket_chiamata_invio_audio.settimeout(5)
             socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1089,74 +1152,52 @@ def call(ip): #ciao
 
             # Connessione ai socket ausiliari con retry
             max_retry = 3
+            connection_success = False
+
             for retry in range(max_retry):
                 try:
                     # Aggiungi piccole pause tra i tentativi di connessione
-                    time.sleep(0.2)
+                    time.sleep(0.3)  # Leggermente aumentato
                     socket_chiamata_invio_audio.connect((ip, PORT_INVIO_AUDIO))
                     print(f"Connessione audio invio stabilita con {ip}:{PORT_INVIO_AUDIO}")
 
-                    time.sleep(0.2)
+                    time.sleep(0.3)
                     socket_chiamata_ricezione_audio.connect((ip, PORT_RICEZIONE_AUDIO))
                     print(f"Connessione audio ricezione stabilita con {ip}:{PORT_RICEZIONE_AUDIO}")
 
-                    time.sleep(0.2)
+                    time.sleep(0.3)
                     socket_comandi_input.connect((ip, PORT_RICEZIONE_COMANDI))
                     print(f"Connessione comandi input stabilita con {ip}:{PORT_RICEZIONE_COMANDI}")
 
-                    time.sleep(0.2)
+                    time.sleep(0.3)
                     socket_comandi_output.connect((ip, PORT_INVIO_COMANDI))
                     print(f"Connessione comandi output stabilita con {ip}:{PORT_INVIO_COMANDI}")
 
-                    # Se tutte le connessioni riuscite, esci dal loop
+                    # Se tutte le connessioni sono riuscite, imposta il flag
+                    connection_success = True
                     break
 
                 except Exception as e:
                     print(f"Errore nella connessione dei socket ausiliari (tentativo {retry + 1}/{max_retry}): {e}")
-                    if retry == max_retry - 1:  # Se è l'ultimo tentativo
+                    # Se non è l'ultimo tentativo, attendiamo e riproviamo
+                    if retry < max_retry - 1:
+                        time.sleep(1.0)  # Attesa più lunga tra i tentativi
+                    else:
                         mostra_finestra_chiamata("ERROR")
-                        termina_chiamata()
+                        termina_chiamata(True)
                         return
-                    time.sleep(1)  # Pausa tra i tentativi
 
+            # Verifica se tutte le connessioni sono state stabilite
+            if not connection_success:
+                print("Impossibile stabilire tutte le connessioni necessarie")
+                mostra_finestra_chiamata("ERROR")
+                termina_chiamata(True)
+                return
+
+            # Imposta lo stato della chiamata
             chiamata_in_corso = True
 
-            # Inizializza PyAudio con impostazioni ottimizzate per la latenza
-            p = pyaudio.PyAudio()
-
-            # Cerca di ottenere il buffer size più piccolo possibile supportato dal sistema
-            min_buffer = CHUNK
-
-            # Apre lo stream audio con impostazioni ottimizzate per bassa latenza
-            try:
-                audioStream = p.open(
-                    format=FORMAT,
-                    rate=RATE,
-                    channels=CHANNEL,
-                    input=True,
-                    output=True,
-                    frames_per_buffer=min_buffer,
-                    input_host_api_specific_stream_info=get_low_latency_settings(),
-                    output_host_api_specific_stream_info=get_low_latency_settings()
-                )
-                print("Stream audio inizializzato con impostazioni a bassa latenza")
-            except Exception as e:
-                print(f"Errore nell'inizializzazione dello stream audio: {e}")
-                # Riprova con impostazioni standard
-                try:
-                    audioStream = p.open(
-                        format=FORMAT,
-                        rate=RATE,
-                        channels=CHANNEL,
-                        input=True,
-                        output=True,
-                        frames_per_buffer=CHUNK
-                    )
-                    print("Stream audio inizializzato con impostazioni standard")
-                except Exception as e2:
-                    print(f"Errore critico nell'inizializzazione audio: {e2}")
-                    termina_chiamata()
-                    return
+            print("Tutte le connessioni stabilite, avvio thread audio...")
 
             # Avvia thread invio audio
             audio_invio_thread = threading.Thread(target=gestisci_invio_audio)
@@ -1182,12 +1223,12 @@ def call(ip): #ciao
         else:
             print(f"Chiamata rifiutata: {response}")
             mostra_finestra_chiamata("REFUSED")
-            termina_chiamata()
+            termina_chiamata(True)
 
     except Exception as e:
         print(f"Errore generale durante la chiamata: {e}")
         mostra_finestra_chiamata("ERROR")
-        termina_chiamata()
+        termina_chiamata(True)
 
 
 def gestisci_comandi_input_chiamata():
@@ -2683,18 +2724,24 @@ def gestisci_ricezione_video():
     except Exception as e:
         print(f"Errore nella ricezione video: {e}")
 
+
 def gestisci_invio_audio():
     """
     Gestisce l'invio dell'audio durante una chiamata.
-    Migliorata la gestione degli errori e dei timeout.
+    Versione migliorata con meccanismo di reconnessione.
     """
-    global chiamata_in_corso, audioStream, is_audio_on, socket_chiamata_invio_audio
+    global chiamata_in_corso, audioStream, is_audio_on, socket_chiamata_invio_audio, ip_chiamata_destinatario
 
     print("Avvio thread invio audio")
 
     # Contatori per gestire errori consecutivi
     consecutive_errors = 0
-    max_errors = 10  # Massimo numero di errori prima di terminare la chiamata
+    max_errors = 15  # Aumentato per maggiore tolleranza
+    reconnection_attempts = 0
+    max_reconnection_attempts = 3
+
+    # Pausa iniziale per dare tempo all'altro client di prepararsi
+    time.sleep(0.5)
 
     try:
         while chiamata_in_corso and socket_chiamata_invio_audio:
@@ -2724,10 +2771,43 @@ def gestisci_invio_audio():
                     socket_chiamata_invio_audio.send(audio_data)
                     # Reset errori dopo invio riuscito
                     consecutive_errors = 0
-                except (BrokenPipeError, ConnectionResetError) as e:
+                    reconnection_attempts = 0  # Reset anche i tentativi di riconnessione
+                except (BrokenPipeError, ConnectionResetError, socket.error) as e:
                     # Connessione interrotta, aumenta contatore errori
                     consecutive_errors += 1
                     print(f"Errore di connessione audio ({consecutive_errors}/{max_errors}): {e}")
+
+                    # Tentativo di riconnessione dopo un certo numero di errori
+                    if consecutive_errors % 5 == 0 and reconnection_attempts < max_reconnection_attempts:
+                        reconnection_attempts += 1
+                        print(f"Tentativo di riconnessione audio ({reconnection_attempts}/{max_reconnection_attempts})")
+
+                        try:
+                            # Chiudi il socket vecchio
+                            try:
+                                socket_chiamata_invio_audio.close()
+                            except:
+                                pass
+
+                            # Ricrea e riconnetti il socket
+                            socket_chiamata_invio_audio = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            socket_chiamata_invio_audio.settimeout(2.0)
+                            socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                            socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+                            socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+
+                            # Ottieni l'IP del destinatario
+                            dest_ip = ip_chiamata_destinatario if ip_chiamata_destinatario else "172.20.10.4"
+
+                            # Ritenta la connessione
+                            socket_chiamata_invio_audio.connect((dest_ip, PORT_INVIO_AUDIO))
+                            print("Riconnessione riuscita per audio invio")
+                            consecutive_errors = 0  # Reset errori dopo riconnessione
+                            # Piccola pausa per stabilizzare
+                            time.sleep(0.2)
+                            continue
+                        except Exception as reconnect_error:
+                            print(f"Errore nella riconnessione: {reconnect_error}")
 
                     # Se troppi errori consecutivi, termina la chiamata
                     if consecutive_errors >= max_errors:
@@ -2788,17 +2868,23 @@ def is_socket_connected(sock):
     except Exception:
         return False
 
+
 def gestisci_ricezione_audio():
     """
     Gestisce la ricezione dell'audio durante una chiamata con gestione robusta errori.
     """
-    global chiamata_in_corso, audioStream, socket_chiamata_ricezione_audio
+    global chiamata_in_corso, audioStream, socket_chiamata_ricezione_audio, ip_chiamata_destinatario
 
     print("Avvio thread ricezione audio")
 
     # Contatori per gestire errori consecutivi
     consecutive_errors = 0
     max_errors = 15  # Più permissivo nella ricezione
+    reconnection_attempts = 0
+    max_reconnection_attempts = 3
+
+    # Pausa iniziale per stabilizzazione
+    time.sleep(0.5)
 
     try:
         while chiamata_in_corso and socket_chiamata_ricezione_audio:
@@ -2818,6 +2904,7 @@ def gestisci_ricezione_audio():
                     # Reset errori dopo ricezione riuscita
                     if audio_data:
                         consecutive_errors = 0
+                        reconnection_attempts = 0
 
                         # Verifica che ci siano dati e che lo stream sia valido
                         if audioStream:
@@ -2832,6 +2919,40 @@ def gestisci_ricezione_audio():
                         # Nessun dato ricevuto, potrebbe essere una disconnessione
                         consecutive_errors += 1
                         print(f"Nessun dato audio ricevuto: {consecutive_errors}/{max_errors}")
+
+                        # Tentativo di riconnessione dopo un certo numero di errori
+                        if consecutive_errors % 5 == 0 and reconnection_attempts < max_reconnection_attempts:
+                            reconnection_attempts += 1
+                            print(
+                                f"Tentativo di riconnessione audio ricezione ({reconnection_attempts}/{max_reconnection_attempts})")
+
+                            try:
+                                # Chiudi il socket vecchio
+                                try:
+                                    socket_chiamata_ricezione_audio.close()
+                                except:
+                                    pass
+
+                                # Ricrea e riconnetti il socket
+                                socket_chiamata_ricezione_audio = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                                socket_chiamata_ricezione_audio.settimeout(2.0)
+                                socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                                socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+                                socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+
+                                # Ottieni l'IP del destinatario
+                                dest_ip = ip_chiamata_destinatario if ip_chiamata_destinatario else "172.20.10.4"
+
+                                # Ritenta la connessione
+                                socket_chiamata_ricezione_audio.connect((dest_ip, PORT_RICEZIONE_AUDIO))
+                                print("Riconnessione riuscita per audio ricezione")
+                                consecutive_errors = 0  # Reset errori dopo riconnessione
+                                # Piccola pausa per stabilizzare
+                                time.sleep(0.2)
+                                continue
+                            except Exception as reconnect_error:
+                                print(f"Errore nella riconnessione ricezione: {reconnect_error}")
+
                         time.sleep(0.1)
 
                 except socket.timeout:
