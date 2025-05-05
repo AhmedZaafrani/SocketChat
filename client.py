@@ -913,6 +913,12 @@ def call(ip):
     global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
     global socket_chiamata_invio_audio, socket_chiamata_ricezione_audio, socket_comandi_input, socket_comandi_output
 
+    # Inizializza tutte le variabili dei socket a None all'inizio della funzione
+    socket_comandi_output = None
+    socket_comandi_input = None
+    socket_chiamata_invio_audio = None
+    socket_chiamata_ricezione_audio = None
+
     # Disabilita immediatamente i pulsanti per evitare chiamate multiple
     dpg.configure_item("btn_videochiama_privato", enabled=False)
     dpg.configure_item("btn_chiama_privato", enabled=False)
@@ -967,24 +973,38 @@ def call(ip):
             termina_chiamata()
             return
 
-        # Invia richiesta di chiamata - IMPORTANTE: Nome mittente
         request = f"CALLREQUEST:{nome_utente_personale}:{is_video}"
         print(f"Invio richiesta: {request}")
         socket_chiamata.send(request.encode('utf-8'))
 
-        # Attendi risposta
+        # Attendi risposta con gestione migliorata del timeout
         try:
+            socket_chiamata.settimeout(5)
             response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
             print(f"Risposta ricevuta: {response}")
         except socket.timeout:
             print("Timeout in attesa di risposta alla richiesta di chiamata")
             mostra_finestra_chiamata("TIMEOUT")
-            termina_chiamata()
+            # Chiudi il socket principale prima di terminare
+            try:
+                socket_chiamata.close()
+                socket_chiamata = None
+            except:
+                pass
+            # Riattiva i pulsanti
+            dpg.configure_item("btn_videochiama_privato", enabled=True)
+            dpg.configure_item("btn_chiama_privato", enabled=True)
+            return
+
+        except socket.timeout:
+            print("Timeout in attesa di risposta alla richiesta di chiamata")
+            mostra_finestra_chiamata("TIMEOUT")
+            termina_chiamata(True)  # Passa True per evitare di ricreare il socket di ascolto
             return
         except Exception as e:
             print(f"Errore nella ricezione della risposta: {e}")
             mostra_finestra_chiamata("ERROR")
-            termina_chiamata()
+            termina_chiamata(True)  # Passa True per evitare di ricreare il socket di ascolto
             return
 
         if response == "CALLREQUEST:ACCEPT":
@@ -2804,6 +2824,20 @@ def termina_chiamata(from_error=False):
     global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
     global socket_chiamata_invio_audio, socket_chiamata_invio_video, socket_chiamata_ricezione_audio, socket_chiamata_ricezione_video
     global socket_comandi_input, socket_comandi_output, call_requests_thread, termina_thread_listen_for_calls
+
+    # Verifica che le variabili globali esistano, altrimenti inizializzale
+    if 'socket_comandi_output' not in globals() or socket_comandi_output is None:
+        socket_comandi_output = None
+    if 'socket_comandi_input' not in globals() or socket_comandi_input is None:
+        socket_comandi_input = None
+    if 'socket_chiamata_invio_audio' not in globals() or socket_chiamata_invio_audio is None:
+        socket_chiamata_invio_audio = None
+    if 'socket_chiamata_ricezione_audio' not in globals() or socket_chiamata_ricezione_audio is None:
+        socket_chiamata_ricezione_audio = None
+    if 'socket_chiamata_invio_video' not in globals() or socket_chiamata_invio_video is None:
+        socket_chiamata_invio_video = None
+    if 'socket_chiamata_ricezione_video' not in globals() or socket_chiamata_ricezione_video is None:
+        socket_chiamata_ricezione_video = None
 
     # Previeni chiamate multiple con un flag
     if not chiamata_in_corso and socket_chiamata is None:
