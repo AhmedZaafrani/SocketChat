@@ -29,7 +29,7 @@ def setup_server_FTP():
     # Itera sulle coppie chiave-valore (username, password)
     for username, password in dict.items():
         # Crea la directory home se non esiste
-        home_dir = "/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp"
+        home_dir = "file_directory_ftp"
         if not os.path.exists(home_dir):
             try:
                 os.makedirs(home_dir)

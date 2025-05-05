@@ -103,7 +103,7 @@ username_client_chat_corrente = ""  # Username del contatto attualmente selezion
 
 if os.name == 'nt':  # Windows
     try:
-        import win32api, win32process, win32con
+        import win32api, win32process, win32com
     except ImportError:
         pass  # Gestiremo questo caso nella funzione set_thread_priority
 
@@ -148,7 +148,7 @@ def set_thread_priority(thread_type="audio"):
     if os.name == 'nt':
         try:
             thread_id = win32api.GetCurrentThreadId()
-            thread_handle = win32api.OpenThread(win32con.THREAD_SET_INFORMATION, False, thread_id)
+            thread_handle = win32api.OpenThread(win32com.THREAD_SET_INFORMATION, False, thread_id)
 
             if thread_type == "audio":
                 # Massima priorità per l'audio
@@ -641,7 +641,7 @@ def listen_for_call_request(socket_attesa_chiamate):
     Thread che ascolta le richieste di chiamata in arrivo.
     Gestisce le connessioni e notifica l'utente quando arriva una chiamata.
     """
-    global termina_thread_listen_for_calls, chiamata_in_corso
+    global termina_thread_listen_for_calls, chiamata_in_corso, is_video
 
     print(f"Avvio thread ascolto chiamate su porta {PORT_CHIAMATE}")
 
@@ -660,8 +660,40 @@ def listen_for_call_request(socket_attesa_chiamate):
                 client, address = socket_attesa_chiamate.accept()
                 print(f"Nuova richiesta di connessione da {address}")
 
-                # Resto del codice per gestire la richiesta di chiamata
-                # ...
+                # Ricevi il messaggio di richiesta chiamata
+                try:
+                    client.settimeout(2.0)
+                    request = client.recv(BUFFER_SIZE).decode('utf-8')
+                    print(f"Richiesta ricevuta: {request}")
+
+                    # Analizza la richiesta
+                    if request.startswith("CALLREQUEST:"):
+                        parts = request.split(":")
+                        if len(parts) >= 3:
+                            caller_name = parts[1]
+                            is_video = parts[2].lower() == "true"
+
+                            # Mostra notifica della chiamata
+                            print(f"Richiesta di {'video' if is_video else ''}chiamata da {caller_name}")
+
+                            # Usa thread per non bloccare l'UI
+                            threading.Thread(
+                                target=notifica_chiamata,
+                                args=(caller_name, client),
+                                daemon=True
+                            ).start()
+                        else:
+                            print("Formato richiesta non valido")
+                            client.close()
+                    else:
+                        print(f"Richiesta non riconosciuta: {request}")
+                        client.close()
+                except socket.timeout:
+                    print("Timeout nella ricezione della richiesta")
+                    client.close()
+                except Exception as e:
+                    print(f"Errore nella gestione della richiesta: {e}")
+                    client.close()
 
             except socket.timeout:
                 # Timeout normale, continua
@@ -905,7 +937,7 @@ def listen_to_server():
     print("Thread di ascolto terminato")
 
 
-def call(ip):
+def call(ip): #ciao
     """
     Inizia una chiamata audio con l'utente all'IP specificato.
     Gestisce correttamente gli errori e mantiene lo stato dell'interfaccia.
@@ -936,7 +968,7 @@ def call(ip):
         utente_in_chiamata = username_client_chat_corrente
 
         # Verifica preliminare della connettività
-        if not verifica_connettivita(ip, PORT_CHIAMATE, timeout=1):
+        if not verifica_connettivita(ip, PORT_CHIAMATE, timeout=2):
             print(f"L'utente {utente_in_chiamata} non è raggiungibile sulla porta {PORT_CHIAMATE}")
             mostra_finestra_chiamata("UNREACHABLE")
             dpg.configure_item("btn_videochiama_privato", enabled=True)
@@ -947,7 +979,7 @@ def call(ip):
 
         # Inizializza il socket principale
         socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket_chiamata.settimeout(5)  # Timeout più breve di 5 secondi
+        socket_chiamata.settimeout(10)  # Aumenta il timeout a 10 secondi
         socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)  # Buffer di ricezione più grande
         socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)  # Buffer di invio più grande
@@ -984,9 +1016,9 @@ def call(ip):
         print(f"Invio richiesta: {request}")
         socket_chiamata.send(request.encode('utf-8'))
 
-        # Attendi risposta con timeout - CORREZIONE QUI
+        # Attendi risposta con timeout aumentato
         try:
-            socket_chiamata.settimeout(5)
+            socket_chiamata.settimeout(10)  # Aumenta il timeout a 10 secondi
             response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
             print(f"Risposta ricevuta: {response}")
 
@@ -1055,24 +1087,37 @@ def call(ip):
             socket_comandi_output.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
             socket_comandi_output.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-            # Connessione ai socket
-            try:
-                socket_chiamata_invio_audio.connect((ip, PORT_INVIO_AUDIO))
-                print(f"Connessione audio invio stabilita con {ip}:{PORT_INVIO_AUDIO}")
+            # Connessione ai socket ausiliari con retry
+            max_retry = 3
+            for retry in range(max_retry):
+                try:
+                    # Aggiungi piccole pause tra i tentativi di connessione
+                    time.sleep(0.2)
+                    socket_chiamata_invio_audio.connect((ip, PORT_INVIO_AUDIO))
+                    print(f"Connessione audio invio stabilita con {ip}:{PORT_INVIO_AUDIO}")
 
-                socket_chiamata_ricezione_audio.connect((ip, PORT_RICEZIONE_AUDIO))
-                print(f"Connessione audio ricezione stabilita con {ip}:{PORT_RICEZIONE_AUDIO}")
+                    time.sleep(0.2)
+                    socket_chiamata_ricezione_audio.connect((ip, PORT_RICEZIONE_AUDIO))
+                    print(f"Connessione audio ricezione stabilita con {ip}:{PORT_RICEZIONE_AUDIO}")
 
-                socket_comandi_input.connect((ip, PORT_RICEZIONE_COMANDI))
-                print(f"Connessione comandi input stabilita con {ip}:{PORT_RICEZIONE_COMANDI}")
+                    time.sleep(0.2)
+                    socket_comandi_input.connect((ip, PORT_RICEZIONE_COMANDI))
+                    print(f"Connessione comandi input stabilita con {ip}:{PORT_RICEZIONE_COMANDI}")
 
-                socket_comandi_output.connect((ip, PORT_INVIO_COMANDI))
-                print(f"Connessione comandi output stabilita con {ip}:{PORT_INVIO_COMANDI}")
-            except Exception as e:
-                print(f"Errore nella connessione dei socket ausiliari: {e}")
-                mostra_finestra_chiamata("ERROR")
-                termina_chiamata()
-                return
+                    time.sleep(0.2)
+                    socket_comandi_output.connect((ip, PORT_INVIO_COMANDI))
+                    print(f"Connessione comandi output stabilita con {ip}:{PORT_INVIO_COMANDI}")
+
+                    # Se tutte le connessioni riuscite, esci dal loop
+                    break
+
+                except Exception as e:
+                    print(f"Errore nella connessione dei socket ausiliari (tentativo {retry + 1}/{max_retry}): {e}")
+                    if retry == max_retry - 1:  # Se è l'ultimo tentativo
+                        mostra_finestra_chiamata("ERROR")
+                        termina_chiamata()
+                        return
+                    time.sleep(1)  # Pausa tra i tentativi
 
             chiamata_in_corso = True
 
@@ -1083,18 +1128,35 @@ def call(ip):
             min_buffer = CHUNK
 
             # Apre lo stream audio con impostazioni ottimizzate per bassa latenza
-            audioStream = p.open(
-                format=FORMAT,
-                rate=RATE,
-                channels=CHANNEL,
-                input=True,
-                output=True,
-                frames_per_buffer=min_buffer,
-                input_host_api_specific_stream_info=get_low_latency_settings(),
-                output_host_api_specific_stream_info=get_low_latency_settings()
-            )
-
-            print("Stream audio inizializzato con impostazioni a bassa latenza")
+            try:
+                audioStream = p.open(
+                    format=FORMAT,
+                    rate=RATE,
+                    channels=CHANNEL,
+                    input=True,
+                    output=True,
+                    frames_per_buffer=min_buffer,
+                    input_host_api_specific_stream_info=get_low_latency_settings(),
+                    output_host_api_specific_stream_info=get_low_latency_settings()
+                )
+                print("Stream audio inizializzato con impostazioni a bassa latenza")
+            except Exception as e:
+                print(f"Errore nell'inizializzazione dello stream audio: {e}")
+                # Riprova con impostazioni standard
+                try:
+                    audioStream = p.open(
+                        format=FORMAT,
+                        rate=RATE,
+                        channels=CHANNEL,
+                        input=True,
+                        output=True,
+                        frames_per_buffer=CHUNK
+                    )
+                    print("Stream audio inizializzato con impostazioni standard")
+                except Exception as e2:
+                    print(f"Errore critico nell'inizializzazione audio: {e2}")
+                    termina_chiamata()
+                    return
 
             # Avvia thread invio audio
             audio_invio_thread = threading.Thread(target=gestisci_invio_audio)
@@ -1111,8 +1173,8 @@ def call(ip):
             comandi_input_thread.daemon = True
             comandi_input_thread.start()
 
-            # Piccolo timeout per dare tempo ai thread di avviarsi
-            time.sleep(0.05)
+            # Attesa più lunga per dare tempo ai thread di avviarsi
+            time.sleep(0.5)
 
             # Mostra finestra di chiamata
             mostra_finestra_chiamata("ACCEPTED")
