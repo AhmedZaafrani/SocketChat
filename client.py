@@ -2975,13 +2975,14 @@ def termina_chiamata(from_error=False):
 
             if bind_success:
                 # Avvia nuovo thread di ascolto
-                global call_requests_thread
-                call_requests_thread = threading.Thread(
+                call_thread = threading.Thread(
                     target=listen_for_call_request,
                     args=(socket_attesa_chiamate,)
                 )
-                call_requests_thread.daemon = True
-                call_requests_thread.start()
+                call_thread.daemon = True
+                call_thread.start()
+                # Assegna al thread globale la nuova istanza
+                call_requests_thread = call_thread
                 print("Nuovo thread di ascolto chiamate avviato")
             else:
                 print(f"Impossibile ricreare socket di ascolto dopo {max_retries} tentativi")
