@@ -1102,16 +1102,62 @@ def call(ip):
         mostra_finestra_chiamata("ERROR")
         termina_chiamata()
 
+
 def gestisci_comandi_input_chiamata():
-    global socket_comandi_input
-    while socket_chiamata:
+    """
+    Gestisce i comandi in ingresso durante una chiamata in modo robusto.
+    Utilizza un meccanismo di timeout avanzato per evitare blocchi.
+    """
+    global socket_comandi_input, chiamata_in_corso
+
+    print("Avvio thread gestione comandi input")
+
+    # Loop principale con controllo attivo della chiamata
+    while chiamata_in_corso and socket_comandi_input:
         try:
-            comando = socket_comandi_input.recv(BUFFER_SIZE).decode('utf-8')
-            if comando == "TERMINA":
+            # Verifica che il socket sia ancora valido
+            if not socket_comandi_input:
+                break
+
+            # Imposta timeout breve per evitare blocchi
+            socket_comandi_input.settimeout(0.5)
+
+            try:
+                # Prova a ricevere un comando
+                comando = socket_comandi_input.recv(BUFFER_SIZE).decode('utf-8')
+
+                # Gestisci il comando se presente
+                if comando:
+                    print(f"Comando ricevuto: {comando}")
+                    if comando == "TERMINA":
+                        print("Comando di terminazione ricevuto")
+                        termina_chiamata()
+                        break
+            except socket.timeout:
+                # Timeout normale, verifichiamo se la chiamata è ancora attiva
+                if not chiamata_in_corso:
+                    break
+                continue
+            except ConnectionResetError:
+                print("Connessione reset dal peer")
                 termina_chiamata()
                 break
+            except Exception as e:
+                print(f"Errore ricezione comando: {e}")
+                # Non terminiamo immediatamente per errori temporanei
+                time.sleep(0.1)
+                continue
+
         except Exception as e:
-            print(f"Errore nell'input comando chiamata: {e}")
+            print(f"Errore gestione comandi input: {e}")
+            if not chiamata_in_corso:
+                break
+            time.sleep(0.1)
+
+        # Breve pausa per ridurre l'utilizzo della CPU
+        time.sleep(0.01)
+
+    print("Thread gestione comandi input terminato")
 
 def debug_richiesta_ip(destinatario, is_video):
     """
@@ -2554,16 +2600,24 @@ def gestisci_ricezione_video():
 def gestisci_invio_audio():
     """
     Gestisce l'invio dell'audio durante una chiamata.
-    Versione robusta che gestisce meglio i timeout e le interruzioni.
+    Migliorata la gestione degli errori e dei timeout.
     """
     global chiamata_in_corso, audioStream, is_audio_on, socket_chiamata_invio_audio
 
     print("Avvio thread invio audio")
 
+    # Imposta alta priorità per questo thread
+    set_thread_priority("audio")
+
     # Verifica iniziale
     if audioStream is None:
         print("Errore: stream audio non inizializzato")
         return
+
+    # Strutture per gestire il reconnect e l'invio fallito
+    consecutive_errors = 0
+    backoff_time = 0.01  # Tempo iniziale di backoff
+    max_backoff_time = 1.0  # Tempo massimo di backoff
 
     try:
         while chiamata_in_corso:
@@ -2573,39 +2627,62 @@ def gestisci_invio_audio():
                 continue
 
             try:
-                # Usa blocchi try separati per ogni operazione critica
+                # Verifica che il socket sia valido
+                if not socket_chiamata_invio_audio:
+                    print("Socket invio audio non valido, termino thread")
+                    break
+
                 try:
-                    # Leggi dati audio con breve timeout
+                    # Leggi dati audio con gestione overflow migliorata
                     with lock_audio:
                         audio_data = audioStream.read(CHUNK, exception_on_overflow=False)
                 except IOError as e:
-                    # Ignora errori di overflow
+                    # Gestione specifica errori PyAudio
                     if "overflow" in str(e).lower():
+                        time.sleep(0.01)  # Piccola pausa per recuperare
                         continue
                     else:
                         print(f"Errore lettura audio: {e}")
                         time.sleep(0.01)
                         continue
 
-                # Verifica che il socket sia valido prima di inviare
-                if socket_chiamata_invio_audio and audio_data:
-                    try:
-                        socket_chiamata_invio_audio.settimeout(0.2)  # Timeout breve ma non troppo
-                        socket_chiamata_invio_audio.send(audio_data)
-                    except (BrokenPipeError, ConnectionResetError) as e:
-                        print(f"Connessione interrotta: {e}")
-                        # Non terminare subito, prova a continuare
-                        time.sleep(0.1)
-                        if not chiamata_in_corso:
-                            break
-                    except socket.timeout:
-                        # Timeout normale, continua
-                        print("Timeout nell'invio audio, riprovo...")
-                        continue
-                    except Exception as e:
-                        print(f"Errore invio audio: {e}")
-                        time.sleep(0.05)
-                        continue
+                # Verifica che ci siano dati da inviare
+                if not audio_data:
+                    time.sleep(0.01)
+                    continue
+
+                # Prova a inviare con timeout adattivo
+                try:
+                    socket_chiamata_invio_audio.settimeout(0.5)  # Timeout aumentato
+                    socket_chiamata_invio_audio.send(audio_data)
+                    # Reset backoff dopo invio riuscito
+                    consecutive_errors = 0
+                    backoff_time = 0.01
+                except (BrokenPipeError, ConnectionResetError) as e:
+                    print(f"Connessione interrotta: {e}")
+                    consecutive_errors += 1
+                    # Aumenta il backoff esponenzialmente
+                    backoff_time = min(backoff_time * 2, max_backoff_time)
+                    time.sleep(backoff_time)
+                    if consecutive_errors > 5:
+                        print("Troppe connessioni fallite, termino thread")
+                        termina_chiamata()
+                        break
+                except socket.timeout:
+                    # Timeout normale, usa strategia di backoff
+                    print(f"Timeout nell'invio audio ({backoff_time:.2f}s), riprovo...")
+                    consecutive_errors += 1
+                    backoff_time = min(backoff_time * 1.5, max_backoff_time)
+                    time.sleep(backoff_time)
+                    if consecutive_errors > 10:
+                        print("Troppi timeout consecutivi, termino thread")
+                        termina_chiamata()
+                        break
+                    continue
+                except Exception as e:
+                    print(f"Errore invio audio: {e}")
+                    time.sleep(0.05)
+                    continue
 
             except Exception as e:
                 print(f"Errore generale audio: {e}")
@@ -2613,8 +2690,8 @@ def gestisci_invio_audio():
                     break
                 time.sleep(0.05)
 
-            # Piccola pausa per evitare utilizzo intensivo della CPU
-            time.sleep(0.001)
+            # Piccola pausa dinamica basata sul backoff
+            time.sleep(max(0.001, backoff_time / 10))
 
     except Exception as e:
         print(f"Errore critico thread audio: {e}")
@@ -2622,38 +2699,92 @@ def gestisci_invio_audio():
         print("Thread invio audio terminato")
 
 
+def is_socket_connected(sock):
+    """
+    Verifica se un socket è ancora connesso.
+    Restituisce True se il socket è attivo, False altrimenti.
+    """
+    if sock is None:
+        return False
+
+    try:
+        # Prova a inviare un dato vuoto (heartbeat)
+        # Se genera errore, il socket è disconnesso
+        sock.settimeout(0.5)
+
+        # Tenta di effettuare un'operazione non bloccante
+        # che rivela lo stato della connessione
+        errno = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+        if errno != 0:
+            return False
+
+        # In alternativa, per alcuni socket:
+        # sock.send(b'', socket.MSG_DONTWAIT)
+        return True
+    except Exception:
+        return False
+
 def gestisci_ricezione_audio():
     """
     Gestisce la ricezione dell'audio durante una chiamata.
-    Versione robusta che gestisce meglio i timeout e le interruzioni.
+    Migliorata la gestione degli errori e dei timeout.
     """
     global chiamata_in_corso, audioStream, socket_chiamata_ricezione_audio
 
     print("Avvio thread ricezione audio")
 
+    # Imposta alta priorità per questo thread
+    set_thread_priority("audio")
+
     if audioStream is None:
         print("Errore: stream audio non inizializzato")
         return
 
+    consecutive_errors = 0
+    backoff_time = 0.01
+    max_backoff_time = 1.0
+
     try:
         while chiamata_in_corso:
             try:
-                # Imposta timeout breve ma non troppo
-                if socket_chiamata_ricezione_audio:
-                    socket_chiamata_ricezione_audio.settimeout(0.2)
-                else:
+                # Verifica che il socket sia valido
+                if not socket_chiamata_ricezione_audio:
+                    print("Socket ricezione audio non valido, termino thread")
                     break
+
+                # Imposta timeout con backoff adattivo
+                timeout_value = min(0.2 + (backoff_time / 5), 1.0)
+                socket_chiamata_ricezione_audio.settimeout(timeout_value)
 
                 try:
                     # Ricevi i dati audio
                     audio_data = socket_chiamata_ricezione_audio.recv(CHUNK * 4)
+                    # Reset backoff dopo ricezione riuscita
+                    consecutive_errors = 0
+                    backoff_time = 0.01
                 except socket.timeout:
-                    # Timeout normale, continua il ciclo
+                    # Aumenta gradualmente il backoff
+                    backoff_time = min(backoff_time * 1.5, max_backoff_time)
+                    consecutive_errors += 1
+                    if consecutive_errors > 20:
+                        print(f"Troppi timeout consecutivi ({consecutive_errors}), verifico stato chiamata")
+                        # Invece di terminare, verifichiamo lo stato
+                        if not is_socket_connected(socket_chiamata_ricezione_audio):
+                            print("Socket disconnesso, termino chiamata")
+                            termina_chiamata()
+                            break
+                        else:
+                            # Reset contatore se la connessione è ancora attiva
+                            consecutive_errors = 10
                     continue
                 except (ConnectionResetError, BrokenPipeError) as e:
                     print(f"Connessione audio interrotta: {e}")
-                    time.sleep(0.1)
-                    if not chiamata_in_corso:
+                    consecutive_errors += 1
+                    backoff_time = min(backoff_time * 2, max_backoff_time)
+                    time.sleep(backoff_time)
+                    if consecutive_errors > 5:
+                        print("Troppe connessioni fallite, termino thread")
+                        termina_chiamata()
                         break
                     continue
 
@@ -2673,8 +2804,8 @@ def gestisci_ricezione_audio():
                     break
                 time.sleep(0.05)
 
-            # Piccola pausa
-            time.sleep(0.001)
+            # Piccola pausa dinamica
+            time.sleep(max(0.001, backoff_time / 10))
 
     except Exception as e:
         print(f"Errore critico thread ricezione: {e}")
@@ -2708,90 +2839,78 @@ def verifica_connettivita(ip, porta, timeout=2):
 def termina_chiamata(from_error=False):
     """
     Termina la chiamata attiva e rilascia le risorse.
+    Versione migliorata con gestione più robusta degli errori.
     """
     global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
     global socket_chiamata_invio_audio, socket_chiamata_invio_video, socket_chiamata_ricezione_audio, socket_chiamata_ricezione_video
-    global socket_comandi_input, socket_comandi_output
+    global socket_comandi_input, socket_comandi_output, call_requests_thread, termina_thread_listen_for_calls
 
     print("Terminazione chiamata...")
 
     # Prima di tutto, imposta stato chiamata terminata
     chiamata_in_corso = False
 
+    # Prova a inviare un comando di terminazione all'altro client
+    try:
+        if socket_comandi_output:
+            socket_comandi_output.settimeout(1.0)
+            socket_comandi_output.send("TERMINA".encode('utf-8'))
+    except Exception as e:
+        print(f"Errore invio comando terminazione: {e}")
+
     # Attendi un momento per permettere ai thread di terminare
     time.sleep(0.2)
 
-    # Chiudi i socket (prima degli stream audio/video)
-    if socket_chiamata:
-        try:
-            socket_chiamata.close()
-        except:
-            pass
-        socket_chiamata = None
+    # Funzione helper per chiudere un socket in modo sicuro
+    def safe_close_socket(socket_obj, socket_name):
+        if socket_obj:
+            try:
+                socket_obj.shutdown(socket.SHUT_RDWR)
+            except Exception as e:
+                pass  # Ignora errori di shutdown
 
-    if socket_comandi_output:
-        try:
-            socket_comandi_output.close()
-        except:
-            pass
-        socket_comandi_output = None
+            try:
+                socket_obj.close()
+                print(f"Socket {socket_name} chiuso correttamente")
+            except Exception as e:
+                print(f"Errore chiusura socket {socket_name}: {e}")
 
-    if socket_comandi_input:
-        try:
-            socket_comandi_input.close()
-        except:
-            pass
-        socket_comandi_input = None
+            return None
+        return socket_obj
 
-    if socket_chiamata_invio_audio:
-        try:
-            socket_chiamata_invio_audio.close()
-        except:
-            pass
-        socket_chiamata_invio_audio = None
-
-    if socket_chiamata_ricezione_audio:
-        try:
-            socket_chiamata_ricezione_audio.close()
-        except:
-            pass
-        socket_chiamata_ricezione_audio = None
-
-    if socket_chiamata_invio_video:
-        try:
-            socket_chiamata_invio_video.close()
-        except:
-            pass
-        socket_chiamata_invio_video = None
-
-    if socket_chiamata_ricezione_video:
-        try:
-            socket_chiamata_ricezione_video.close()
-        except:
-            pass
-        socket_chiamata_ricezione_video = None
+    # Chiudi i socket in modo sicuro
+    socket_chiamata = safe_close_socket(socket_chiamata, "chiamata")
+    socket_comandi_output = safe_close_socket(socket_comandi_output, "comandi_output")
+    socket_comandi_input = safe_close_socket(socket_comandi_input, "comandi_input")
+    socket_chiamata_invio_audio = safe_close_socket(socket_chiamata_invio_audio, "invio_audio")
+    socket_chiamata_ricezione_audio = safe_close_socket(socket_chiamata_ricezione_audio, "ricezione_audio")
+    socket_chiamata_invio_video = safe_close_socket(socket_chiamata_invio_video, "invio_video")
+    socket_chiamata_ricezione_video = safe_close_socket(socket_chiamata_ricezione_video, "ricezione_video")
 
     # Ora chiudi le risorse audio/video
     if VideoCapture:
         try:
             VideoCapture.release()
-        except:
-            pass
+            print("VideoCapture rilasciato correttamente")
+        except Exception as e:
+            print(f"Errore rilascio VideoCapture: {e}")
         VideoCapture = None
 
     if audioStream:
         try:
             audioStream.stop_stream()
             audioStream.close()
-        except:
-            pass
+            print("Stream audio chiuso correttamente")
+        except Exception as e:
+            print(f"Errore chiusura stream audio: {e}")
         audioStream = None
 
     if p:
         try:
             p.terminate()
-        except:
-            pass
+            print("PyAudio terminato correttamente")
+        except Exception as e:
+            print(f"Errore terminazione PyAudio: {e}")
         p = None
 
     # Reimposta le variabili
@@ -2799,43 +2918,77 @@ def termina_chiamata(from_error=False):
     utente_in_chiamata = ""
 
     # Chiudi la finestra di chiamata
-    if dpg.does_item_exist("finestra_chiamata"):
-        dpg.delete_item("finestra_chiamata")
+    try:
+        if dpg.does_item_exist("finestra_chiamata"):
+            dpg.delete_item("finestra_chiamata")
 
-    if dpg.does_item_exist("registro_chiamata"):
-        dpg.delete_item("registro_chiamata")
+        if dpg.does_item_exist("registro_chiamata"):
+            dpg.delete_item("registro_chiamata")
+    except Exception as e:
+        print(f"Errore chiusura finestra UI: {e}")
 
-    # Riattiva i pulsanti
-    dpg.configure_item("btn_videochiama_privato", enabled=True)
-    dpg.configure_item("btn_chiama_privato", enabled=True)
+    # Riattiva i pulsanti con verifica che esistano ancora
+    try:
+        if dpg.does_item_exist("btn_videochiama_privato"):
+            dpg.configure_item("btn_videochiama_privato", enabled=True)
 
-    # Riavvia il socket di ascolto
+        if dpg.does_item_exist("btn_chiama_privato"):
+            dpg.configure_item("btn_chiama_privato", enabled=True)
+    except Exception as e:
+        print(f"Errore riattivazione pulsanti UI: {e}")
+
+    # Riavvia il socket di ascolto se non siamo in uno stato di errore grave
     if not from_error:
         try:
             # Attendiamo un momento prima di riavviare
-            time.sleep(0.5)
+            time.sleep(1.0)
 
-            # Crea un nuovo socket di ascolto
+            # Termina il vecchio thread di ascolto se esiste
+            if call_requests_thread and call_requests_thread.is_alive():
+                termina_thread_listen_for_calls = True
+                # Attendi brevemente per terminare il thread
+                time.sleep(0.5)
+
+            # Resetta il flag di terminazione
+            termina_thread_listen_for_calls = False
+
+            # Crea un nuovo socket di ascolto con gestione dei port già in uso
             socket_attesa_chiamate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             socket_attesa_chiamate.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             socket_attesa_chiamate.settimeout(1.0)
 
-            try:
-                socket_attesa_chiamate.bind(("0.0.0.0", PORT_CHIAMATE))
-                socket_attesa_chiamate.listen(1)
+            retry_count = 0
+            max_retries = 3
+            bind_success = False
 
-                global call_requests_thread, termina_thread_listen_for_calls
-                termina_thread_listen_for_calls = False
+            while retry_count < max_retries and not bind_success:
+                try:
+                    socket_attesa_chiamate.bind(("0.0.0.0", PORT_CHIAMATE))
+                    socket_attesa_chiamate.listen(1)
+                    bind_success = True
+                    print(f"Socket di ascolto chiamate ricreato con successo sulla porta {PORT_CHIAMATE}")
+                except OSError as e:
+                    retry_count += 1
+                    print(f"Tentativo {retry_count}/{max_retries} - Errore bind porta {PORT_CHIAMATE}: {e}")
+                    # Attendi un po' prima di riprovare
+                    time.sleep(2.0 * retry_count)
+
+            if bind_success:
+                # Avvia nuovo thread di ascolto
+                global call_requests_thread
                 call_requests_thread = threading.Thread(
                     target=listen_for_call_request,
                     args=(socket_attesa_chiamate,)
                 )
                 call_requests_thread.daemon = True
                 call_requests_thread.start()
-            except OSError:
-                print("Porta già in uso, il thread di ascolto potrebbe essere ancora attivo")
-        except:
-            pass
+                print("Nuovo thread di ascolto chiamate avviato")
+            else:
+                print(f"Impossibile ricreare socket di ascolto dopo {max_retries} tentativi")
+        except Exception as e:
+            print(f"Errore nel riavvio del socket di ascolto: {e}")
+
+    print("Terminazione chiamata completata")
 
 def select_private_file():
     #Apre un dialog per selezionare un file da inviare in chat privata
