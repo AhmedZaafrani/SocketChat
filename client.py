@@ -144,6 +144,7 @@ def get_chat_download_folder(username):
 
 def set_thread_priority(thread_type="audio"):
     """Imposta la priorità del thread corrente in base al tipo.
+    Versione robusta che non richiede win32com.
 
     Args:
         thread_type: Tipo di thread ("audio", "video", o "ui")
@@ -151,20 +152,37 @@ def set_thread_priority(thread_type="audio"):
     # Solo su Windows possiamo impostare la priorità
     if os.name == 'nt':
         try:
-            thread_id = win32api.GetCurrentThreadId()
-            thread_handle = win32api.OpenThread(win32com.THREAD_SET_INFORMATION, False, thread_id)
+            # Verifica che i moduli di base siano importati
+            if 'win32api' not in globals() or 'win32process' not in globals():
+                print(f"Moduli Windows API di base non disponibili per impostare priorità thread {thread_type}")
+                return
 
+            # Costanti per i valori di priorità dei thread in Windows
+            # Se win32com non è disponibile, definiamo direttamente le costanti necessarie
+            THREAD_SET_INFORMATION = 0x0020  # Valore standard per THREAD_SET_INFORMATION
+
+            thread_id = win32api.GetCurrentThreadId()
+            thread_handle = win32api.OpenThread(THREAD_SET_INFORMATION, False, thread_id)
+
+            # Impostazione della priorità in base al tipo di thread
             if thread_type == "audio":
                 # Massima priorità per l'audio
                 win32process.SetThreadPriority(thread_handle, win32process.THREAD_PRIORITY_TIME_CRITICAL)
+                print(f"Priorità thread audio impostata a THREAD_PRIORITY_TIME_CRITICAL")
             elif thread_type == "video":
                 # Alta priorità per il video
                 win32process.SetThreadPriority(thread_handle, win32process.THREAD_PRIORITY_HIGHEST)
+                print(f"Priorità thread video impostata a THREAD_PRIORITY_HIGHEST")
             elif thread_type == "ui":
                 # Priorità normale per l'UI
                 win32process.SetThreadPriority(thread_handle, win32process.THREAD_PRIORITY_NORMAL)
+                print(f"Priorità thread UI impostata a THREAD_PRIORITY_NORMAL")
+
+        except ImportError as e:
+            print(f"Moduli Windows non disponibili: {e}")
         except Exception as e:
             print(f"Errore nell'impostazione della priorità del thread {thread_type}: {e}")
+            # Non blocchiamo l'esecuzione per questo errore
 
 def setup_connection_server_FTP():
     global ftp_server
@@ -428,15 +446,51 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
                 time.sleep(0.1)
 
         # Inizializza PyAudio
-        p = pyaudio.PyAudio()
-        audioStream = p.open(
-            format=FORMAT,
-            rate=RATE,
-            channels=CHANNEL,
-            input=True,
-            output=True,
-            frames_per_buffer=CHUNK
-        )
+        # Inizializzazione audio sicura
+        try:
+            p = pyaudio.PyAudio()
+
+            # Ottieni impostazioni a bassa latenza (potrebbe essere None)
+            low_latency_settings = get_low_latency_settings()
+
+            # Parametri standard per lo stream audio
+            stream_params = {
+                'format': FORMAT,
+                'rate': RATE,
+                'channels': CHANNEL,
+                'input': True,
+                'output': True,
+                'frames_per_buffer': CHUNK,
+                'start': True
+            }
+
+            # Aggiungi impostazioni a bassa latenza solo se disponibili
+            if low_latency_settings is not None:
+                stream_params['input_host_api_specific_stream_info'] = low_latency_settings
+                stream_params['output_host_api_specific_stream_info'] = low_latency_settings
+                print("Utilizzo impostazioni a bassa latenza")
+            else:
+                print("Utilizzo impostazioni audio standard")
+
+            # Apri lo stream audio con i parametri configurati
+            audioStream = p.open(**stream_params)
+            print("Stream audio inizializzato correttamente")
+
+        except Exception as e:
+            print(f"Errore nell'inizializzazione audio: {e}")
+            # Tentativo di fallback con impostazioni minime
+            try:
+                audioStream = p.open(
+                    format=FORMAT,
+                    rate=RATE,
+                    channels=CHANNEL,
+                    input=True,
+                    output=True,
+                    frames_per_buffer=CHUNK
+                )
+                print("Stream audio inizializzato con impostazioni base")
+            except Exception as e2:
+                print(f"Errore critico nell'inizializzazione audio: {e2}")
 
         print("Stream audio inizializzato correttamente")
 
@@ -1023,25 +1077,39 @@ def call(ip):  # vedi se ha pushato
         # Procedi solo se la risposta è positiva
         if response == "CALLREQUEST:ACCEPT":
             # Inizializza PyAudio PRIMA di creare i socket di connessione
+            # Inizializzazione audio sicura
             try:
-                # Inizializza PyAudio con impostazioni ottimizzate per la latenza
                 p = pyaudio.PyAudio()
-                min_buffer = CHUNK
-                audioStream = p.open(
-                    format=FORMAT,
-                    rate=RATE,
-                    channels=CHANNEL,
-                    input=True,
-                    output=True,
-                    frames_per_buffer=min_buffer,
-                    start=True,  # Avvia immediatamente lo stream
-                    input_host_api_specific_stream_info=get_low_latency_settings(),
-                    output_host_api_specific_stream_info=get_low_latency_settings()
-                )
-                print("Stream audio inizializzato con impostazioni a bassa latenza")
+
+                # Ottieni impostazioni a bassa latenza (potrebbe essere None)
+                low_latency_settings = get_low_latency_settings()
+
+                # Parametri standard per lo stream audio
+                stream_params = {
+                    'format': FORMAT,
+                    'rate': RATE,
+                    'channels': CHANNEL,
+                    'input': True,
+                    'output': True,
+                    'frames_per_buffer': CHUNK,
+                    'start': True
+                }
+
+                # Aggiungi impostazioni a bassa latenza solo se disponibili
+                if low_latency_settings is not None:
+                    stream_params['input_host_api_specific_stream_info'] = low_latency_settings
+                    stream_params['output_host_api_specific_stream_info'] = low_latency_settings
+                    print("Utilizzo impostazioni a bassa latenza")
+                else:
+                    print("Utilizzo impostazioni audio standard")
+
+                # Apri lo stream audio con i parametri configurati
+                audioStream = p.open(**stream_params)
+                print("Stream audio inizializzato correttamente")
+
             except Exception as e:
-                print(f"Errore nell'inizializzazione dello stream audio: {e}")
-                # Riprova con impostazioni standard
+                print(f"Errore nell'inizializzazione audio: {e}")
+                # Tentativo di fallback con impostazioni minime
                 try:
                     audioStream = p.open(
                         format=FORMAT,
@@ -1049,14 +1117,15 @@ def call(ip):  # vedi se ha pushato
                         channels=CHANNEL,
                         input=True,
                         output=True,
-                        frames_per_buffer=CHUNK,
-                        start=True
+                        frames_per_buffer=CHUNK
                     )
-                    print("Stream audio inizializzato con impostazioni standard")
+                    print("Stream audio inizializzato con impostazioni base")
                 except Exception as e2:
                     print(f"Errore critico nell'inizializzazione audio: {e2}")
-                    socket_chiamata.close()
-                    socket_chiamata = None
+                    # Gestisci l'errore critico
+                    if socket_chiamata:
+                        socket_chiamata.close()
+                        socket_chiamata = None
                     mostra_finestra_chiamata("ERROR")
                     dpg.configure_item("btn_videochiama_privato", enabled=True)
                     dpg.configure_item("btn_chiama_privato", enabled=True)
@@ -1276,34 +1345,36 @@ def debug_richiesta_ip(destinatario, is_video):
 
 def get_low_latency_settings():
     """
-    Crea impostazioni a bassa latenza specifiche per l'host API
+    Crea impostazioni a bassa latenza specifiche per l'host API.
+    Versione robusta che funziona anche senza attributi specifici.
     """
     try:
-        # Su Windows, utilizziamo le impostazioni WASAPI per la bassa latenza
+        # Su Windows, non abbiamo bisogno di impostazioni speciali
         if os.name == 'nt':
-            if not hasattr(pyaudio.PaMacCoreStreamInfo, 'kAudioLowLatencyMode'):
-                # Creazione di strutture dati per le API WASAPI
-                # (questo è uno stub, pyaudio non fornisce direttamente queste API)
+            return None
+
+        # Su macOS, prima verifichiamo se PaMacCoreStreamInfo esiste
+        elif sys.platform == 'darwin':
+            if not hasattr(pyaudio, 'PaMacCoreStreamInfo'):
+                print("Attributo PaMacCoreStreamInfo non disponibile in questa versione di PyAudio")
                 return None
 
-        # Su macOS, utilizziamo Core Audio per la bassa latenza
-        elif sys.platform == 'darwin':
-            # Richiede pyaudio compilato con supporto Core Audio
-            if hasattr(pyaudio, 'paMacCoreStreamInfo'):
-                stream_info = pyaudio.PaMacCoreStreamInfo(
-                    flags=pyaudio.PaMacCoreStreamInfo.kAudioLowLatencyMode
-                )
-                return stream_info
+            # Ora verifichiamo se ha il flag kAudioLowLatencyMode
+            PaMacCoreStreamInfo = pyaudio.PaMacCoreStreamInfo
+            if not hasattr(PaMacCoreStreamInfo, 'kAudioLowLatencyMode'):
+                print("Flag kAudioLowLatencyMode non disponibile in questa versione di PyAudio")
+                return None
 
-        # Su Linux, utilizziamo ALSA o PulseAudio
+            # Se arriviamo qui, possiamo creare l'oggetto con le impostazioni
+            return PaMacCoreStreamInfo(flags=PaMacCoreStreamInfo.kAudioLowLatencyMode)
+
+        # Linux o altro sistema
         else:
-            # Impostazioni specifiche per ALSA/PulseAudio
-            # (questo è uno stub perché pyaudio non fornisce un'API specifica)
             return None
+
     except Exception as e:
         print(f"Avviso: Impossibile creare impostazioni a bassa latenza: {e}")
-
-    return None
+        return None
 
 
 def get_low_latency_settings():
@@ -1542,23 +1613,39 @@ def videocall(ip):
 
         if response == "CALLREQUEST:ACCEPT":
             # Inizializza PyAudio
+            # Inizializzazione audio sicura
             try:
                 p = pyaudio.PyAudio()
-                audioStream = p.open(
-                    format=FORMAT,
-                    rate=RATE,
-                    channels=CHANNEL,
-                    input=True,
-                    output=True,
-                    frames_per_buffer=CHUNK,
-                    start=True,
-                    input_host_api_specific_stream_info=get_low_latency_settings(),
-                    output_host_api_specific_stream_info=get_low_latency_settings()
-                )
-                print("Stream audio inizializzato con impostazioni a bassa latenza")
+
+                # Ottieni impostazioni a bassa latenza (potrebbe essere None)
+                low_latency_settings = get_low_latency_settings()
+
+                # Parametri standard per lo stream audio
+                stream_params = {
+                    'format': FORMAT,
+                    'rate': RATE,
+                    'channels': CHANNEL,
+                    'input': True,
+                    'output': True,
+                    'frames_per_buffer': CHUNK,
+                    'start': True
+                }
+
+                # Aggiungi impostazioni a bassa latenza solo se disponibili
+                if low_latency_settings is not None:
+                    stream_params['input_host_api_specific_stream_info'] = low_latency_settings
+                    stream_params['output_host_api_specific_stream_info'] = low_latency_settings
+                    print("Utilizzo impostazioni a bassa latenza")
+                else:
+                    print("Utilizzo impostazioni audio standard")
+
+                # Apri lo stream audio con i parametri configurati
+                audioStream = p.open(**stream_params)
+                print("Stream audio inizializzato correttamente")
+
             except Exception as e:
                 print(f"Errore nell'inizializzazione audio: {e}")
-                # Riprova con impostazioni standard
+                # Tentativo di fallback con impostazioni minime
                 try:
                     audioStream = p.open(
                         format=FORMAT,
@@ -1566,14 +1653,15 @@ def videocall(ip):
                         channels=CHANNEL,
                         input=True,
                         output=True,
-                        frames_per_buffer=CHUNK,
-                        start=True
+                        frames_per_buffer=CHUNK
                     )
-                    print("Stream audio inizializzato con impostazioni standard")
+                    print("Stream audio inizializzato con impostazioni base")
                 except Exception as e2:
                     print(f"Errore critico nell'inizializzazione audio: {e2}")
-                    socket_chiamata.close()
-                    socket_chiamata = None
+                    # Gestisci l'errore critico
+                    if socket_chiamata:
+                        socket_chiamata.close()
+                        socket_chiamata = None
                     mostra_finestra_chiamata("ERROR")
                     dpg.configure_item("btn_videochiama_privato", enabled=True)
                     dpg.configure_item("btn_chiama_privato", enabled=True)
