@@ -448,33 +448,18 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
         # Inizializza PyAudio
         # Inizializzazione audio sicura
         try:
+            # Inizializza PyAudio con impostazioni standard
             p = pyaudio.PyAudio()
-
-            # Ottieni impostazioni a bassa latenza (potrebbe essere None)
-            low_latency_settings = get_low_latency_settings()
-
-            # Parametri standard per lo stream audio
-            stream_params = {
-                'format': FORMAT,
-                'rate': RATE,
-                'channels': CHANNEL,
-                'input': True,
-                'output': True,
-                'frames_per_buffer': CHUNK,
-                'start': True
-            }
-
-            # Aggiungi impostazioni a bassa latenza solo se disponibili
-            if low_latency_settings is not None:
-                stream_params['input_host_api_specific_stream_info'] = low_latency_settings
-                stream_params['output_host_api_specific_stream_info'] = low_latency_settings
-                print("Utilizzo impostazioni a bassa latenza")
-            else:
-                print("Utilizzo impostazioni audio standard")
-
-            # Apri lo stream audio con i parametri configurati
-            audioStream = p.open(**stream_params)
-            print("Stream audio inizializzato correttamente")
+            audioStream = p.open(
+                format=FORMAT,
+                rate=RATE,
+                channels=CHANNEL,
+                input=True,
+                output=True,
+                frames_per_buffer=CHUNK,
+                start=True
+            )
+            print("Stream audio inizializzato con impostazioni standard")
 
         except Exception as e:
             print(f"Errore nell'inizializzazione audio: {e}")
@@ -1079,33 +1064,18 @@ def call(ip):  # vedi se ha pushato
             # Inizializza PyAudio PRIMA di creare i socket di connessione
             # Inizializzazione audio sicura
             try:
+                # Inizializza PyAudio con impostazioni standard
                 p = pyaudio.PyAudio()
-
-                # Ottieni impostazioni a bassa latenza (potrebbe essere None)
-                low_latency_settings = get_low_latency_settings()
-
-                # Parametri standard per lo stream audio
-                stream_params = {
-                    'format': FORMAT,
-                    'rate': RATE,
-                    'channels': CHANNEL,
-                    'input': True,
-                    'output': True,
-                    'frames_per_buffer': CHUNK,
-                    'start': True
-                }
-
-                # Aggiungi impostazioni a bassa latenza solo se disponibili
-                if low_latency_settings is not None:
-                    stream_params['input_host_api_specific_stream_info'] = low_latency_settings
-                    stream_params['output_host_api_specific_stream_info'] = low_latency_settings
-                    print("Utilizzo impostazioni a bassa latenza")
-                else:
-                    print("Utilizzo impostazioni audio standard")
-
-                # Apri lo stream audio con i parametri configurati
-                audioStream = p.open(**stream_params)
-                print("Stream audio inizializzato correttamente")
+                audioStream = p.open(
+                    format=FORMAT,
+                    rate=RATE,
+                    channels=CHANNEL,
+                    input=True,
+                    output=True,
+                    frames_per_buffer=CHUNK,
+                    start=True
+                )
+                print("Stream audio inizializzato con impostazioni standard")
 
             except Exception as e:
                 print(f"Errore nell'inizializzazione audio: {e}")
@@ -1615,33 +1585,18 @@ def videocall(ip):
             # Inizializza PyAudio
             # Inizializzazione audio sicura
             try:
+                # Inizializza PyAudio con impostazioni standard
                 p = pyaudio.PyAudio()
-
-                # Ottieni impostazioni a bassa latenza (potrebbe essere None)
-                low_latency_settings = get_low_latency_settings()
-
-                # Parametri standard per lo stream audio
-                stream_params = {
-                    'format': FORMAT,
-                    'rate': RATE,
-                    'channels': CHANNEL,
-                    'input': True,
-                    'output': True,
-                    'frames_per_buffer': CHUNK,
-                    'start': True
-                }
-
-                # Aggiungi impostazioni a bassa latenza solo se disponibili
-                if low_latency_settings is not None:
-                    stream_params['input_host_api_specific_stream_info'] = low_latency_settings
-                    stream_params['output_host_api_specific_stream_info'] = low_latency_settings
-                    print("Utilizzo impostazioni a bassa latenza")
-                else:
-                    print("Utilizzo impostazioni audio standard")
-
-                # Apri lo stream audio con i parametri configurati
-                audioStream = p.open(**stream_params)
-                print("Stream audio inizializzato correttamente")
+                audioStream = p.open(
+                    format=FORMAT,
+                    rate=RATE,
+                    channels=CHANNEL,
+                    input=True,
+                    output=True,
+                    frames_per_buffer=CHUNK,
+                    start=True
+                )
+                print("Stream audio inizializzato con impostazioni standard")
 
             except Exception as e:
                 print(f"Errore nell'inizializzazione audio: {e}")
