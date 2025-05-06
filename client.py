@@ -319,10 +319,11 @@ def login():
 def accetta_chiamata(chiChiama, is_videochiamata, client):
     """
     Accetta una chiamata in arrivo e inizializza le risorse audio/video.
+    Versione UDP per audio e video.
     """
     global socket_chiamata, chiamata_in_corso, p, audioStream, VideoCapture, is_video, utente_in_chiamata
     global socket_chiamata_invio_audio, socket_chiamata_invio_video, socket_chiamata_ricezione_audio, socket_chiamata_ricezione_video
-    global socket_comandi_input, socket_comandi_output
+    global socket_comandi_input, socket_comandi_output, ip_chiamata_destinatario
 
     try:
         print(f"Accettando chiamata da {chiChiama}, video={is_videochiamata}")
@@ -336,52 +337,95 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
 
         # Imposta le variabili globali
         socket_chiamata = client
-        ip_chiamata_destinatario = client.getsocktopt()
+        ip_chiamata_destinatario = client.getpeername()[0]
+        print(f"IP del chiamante: {ip_chiamata_destinatario}")
         chiamata_in_corso = True
         is_video = is_videochiamata
         utente_in_chiamata = chiChiama
 
         # Crea tutti i socket necessari
+        # Socket UDP per audio
         socket_chiamata_invio_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
 
         socket_chiamata_ricezione_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+        socket_chiamata_ricezione_audio.settimeout(0.1)  # Aggiungi timeout per non bloccare
 
-        socket_comandi_input = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # TCP per comandi (mantenere TCP per comandi è più semplice)
+        socket_comandi_input = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket_comandi_input.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         socket_comandi_input.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
 
-        socket_comandi_output = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        socket_comandi_output = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        socket_comandi_output.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         socket_comandi_output.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
 
         if is_videochiamata:
             socket_chiamata_invio_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            socket_chiamata_invio_video.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+            socket_chiamata_invio_video.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,
+                                                   262144)  # Buffer più grande per video
 
             socket_chiamata_ricezione_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            socket_chiamata_ricezione_video.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+            socket_chiamata_ricezione_video.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
+            socket_chiamata_ricezione_video.settimeout(0.1)  # Aggiungi timeout per non bloccare
 
         # Configura i socket per attendere connessioni
         try:
-
+            # Binda i socket UDP di ricezione (senza listen)
             socket_chiamata_ricezione_audio.bind(("0.0.0.0", PORT_RICEZIONE_AUDIO))
-            socket_chiamata_ricezione_audio.listen(1)
             print(f"Socket ricezione audio in ascolto su porta {PORT_RICEZIONE_AUDIO}")
 
+            # Binda e listen per i socket TCP
             socket_comandi_input.bind(("0.0.0.0", PORT_RICEZIONE_COMANDI))
             socket_comandi_input.listen(1)
             print(f"Socket comandi input in ascolto su porta {PORT_RICEZIONE_COMANDI}")
 
+            socket_comandi_output.bind(("0.0.0.0", PORT_INVIO_COMANDI))
+            socket_comandi_output.listen(1)
+            print(f"Socket comandi output in ascolto su porta {PORT_INVIO_COMANDI}")
+
             if is_videochiamata:
                 socket_chiamata_ricezione_video.bind(("0.0.0.0", PORT_RICEZIONE_VIDEO))
-                socket_chiamata_ricezione_video.listen(1)
                 print(f"Socket ricezione video in ascolto su porta {PORT_RICEZIONE_VIDEO}")
+
         except OSError as e:
             if e.errno == 48:  # Address already in use
                 print(f"Errore: porta già in uso. Potrebbe esserci una chiamata attiva non terminata correttamente.")
                 client.send("CALLREQUEST:ERROR".encode('utf-8'))
                 return
             raise
+
+        # Per i socket TCP, dobbiamo accettare le connessioni
+        print("In attesa di connessioni dai socket TCP...")
+        timeout = time.time() + 10  # 10 secondi di timeout
+
+        socket_comandi_input_conn = None
+        socket_comandi_output_conn = None
+
+        while time.time() < timeout:
+            try:
+                if not socket_comandi_input_conn:
+                    socket_comandi_input.settimeout(0.5)
+                    socket_comandi_input_conn, _ = socket_comandi_input.accept()
+                    print(f"Connesso input comandi: {socket_comandi_input_conn.getpeername()}")
+
+                if not socket_comandi_output_conn:
+                    socket_comandi_output.settimeout(0.5)
+                    socket_comandi_output_conn, _ = socket_comandi_output.accept()
+                    print(f"Connesso output comandi: {socket_comandi_output_conn.getpeername()}")
+
+                if socket_comandi_input_conn and socket_comandi_output_conn:
+                    # Sostituisci i socket originali con le connessioni accettate
+                    socket_comandi_input = socket_comandi_input_conn
+                    socket_comandi_output = socket_comandi_output_conn
+                    break
+            except socket.timeout:
+                # Timeout normale, continua
+                continue
+            except Exception as e:
+                print(f"Errore durante l'accettazione delle connessioni TCP: {e}")
+                time.sleep(0.1)
 
         # Inizializza PyAudio
         p = pyaudio.PyAudio()
