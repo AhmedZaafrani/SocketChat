@@ -1,5 +1,8 @@
 # SocketChat
 
+![screen-capture](https://github.com/user-attachments/assets/a9b6fe1c-82da-41a0-a3ee-dd1161fc8eb8)
+
+
 **SocketChat** è un progetto innovativo progettato per dimostrare la funzionalità di chat in tempo reale utilizzando i sockets.
 Fornisce una piattaforma di comunicazione senza interruzioni e serve come base per costruire applicazioni più complesse basate su sockets.
 
