@@ -1637,7 +1637,7 @@ def videocall(ip):
                 print("OutputStream audio inizializzato correttamente")
 
                 # Gestisci l'errore critico
-            if socket_chiamata:
+            if not socket_chiamata:
                 socket_chiamata.close()
                 socket_chiamata = None
                 mostra_finestra_chiamata("ERROR")
@@ -2529,7 +2529,7 @@ def mostra_finestra_chiamata(risposta):
         # Per chiamate solo audio: finestra più piccola
         if is_video:
             call_window_width = 660  # Sufficiente per 2 video affiancati (320*2 + margini)
-            call_window_height = 380  # Altezza singolo video + controlli + margini
+            call_window_height = 450  # Altezza singolo video + controlli + margini
         else:
             call_window_width = 400  # Finestra più piccola per solo audio
             call_window_height = 180  # Altezza ridotta per solo audio
