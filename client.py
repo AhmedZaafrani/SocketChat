@@ -825,7 +825,7 @@ def listen_to_server():
                     # Se non è un JSON valido, procedi come messaggio normale
 
             # Gestione messaggi privati
-            if msg.startswith("PRIVATE:"):
+            elif msg.startswith("PRIVATE:"):
                 if "sending_file:" in msg:
                     try:
                         # Formato: PRIVATE:sending_file:mittente:timestamp:nome_file
@@ -894,7 +894,7 @@ def listen_to_server():
                     # Non mostrare il messaggio privato nella chat globale
                     continue
 
-            if msg.startswith("IP:CALL:"):
+            elif msg.startswith("IP:CALL:"):
                 keys = msg.split(':')
                 # risposta != "Nessun client con quel nome disponibile"
                 ip_utente_da_chiamare = keys[2]
@@ -904,7 +904,7 @@ def listen_to_server():
                 thread_chiama = threading.Thread(target=call, args=(ip_utente_da_chiamare,))
                 thread_chiama.start()
 
-            if msg.startswith("IP:VIDEOCALL:"):
+            elif msg.startswith("IP:VIDEOCALL:"):
                 keys = msg.split(':')
                 # risposta != "Nessun client con quel nome disponibile"
                 ip_utente_da_chiamare = keys[2]
@@ -915,7 +915,7 @@ def listen_to_server():
                 thread_chiama.start()
 
             # Gestione file in arrivo
-            if msg == "sending_file":
+            elif msg == "sending_file":
                 print("Rilevata notifica di invio file")
 
                 # Ricevi timestamp e nome utente
@@ -1276,6 +1276,7 @@ def gestisci_comandi_input_chiamata():
         try:
             # Verifica che il socket sia ancora valido
             if not socket_comandi_input:
+                print("socket non valido input comandi")
                 break
 
             # Imposta timeout breve per evitare blocchi
@@ -1288,7 +1289,7 @@ def gestisci_comandi_input_chiamata():
                 # Gestisci il comando se presente
                 if comando:
                     print(f"Comando ricevuto: {comando}")
-                    if comando == "TERMINA":
+                    if comando == b"TERMINA":
                         print("Comando di terminazione ricevuto")
                         termina_chiamata()
                         break
@@ -2484,8 +2485,8 @@ def mostra_finestra_chiamata(risposta):
 
     # Per gli stati di errore, mostriamo solo un messaggio semplice
     if risposta in ["UNREACHABLE", "TIMEOUT", "ERROR", "REFUSED"]:
-        window_width = 330
-        window_height = 170
+        window_width = 350
+        window_height = 160
         window_pos = [viewport_width // 2 - window_width // 2, viewport_height // 2 - window_height // 2]
 
         # Costruisci il messaggio in base alla risposta
