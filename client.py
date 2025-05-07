@@ -2369,7 +2369,7 @@ def create_gui():
                         # titolo/nome della chat
                         with dpg.group(horizontal=True, tag="Nome_chat"):
                             dpg.add_text("Seleziona una chat", tag="titolo_chat_attiva")
-                            dpg.add_spacer(width=355)
+                            dpg.add_spacer(width=345)
                             dpg.add_button(label="Chiama", tag="btn_chiama_privato", callback=lambda:chiama_privato(True), width=70)
                             dpg.add_button(label="Videochiama", tag="btn_videochiama_privato", callback=lambda:videochiama_privato(True), width=90)
 
@@ -2377,18 +2377,18 @@ def create_gui():
 
                         # Chat log privata
                         dpg.add_input_text(tag="chatlog_field_privata", multiline=True,
-                                           readonly=True, height=-70, width=-1)
+                                           readonly=True, height=-70, width=680)
 
                         # Area di input
                         with dpg.group(horizontal=True):
                             dpg.add_input_text(tag="input_txt_chat_privata", multiline=False, width=-100)
                             dpg.add_button(label="Invia", tag="btn_invia_messaggio_privato",
-                                           callback=invia_messaggio_privato, width=80)
+                                           callback=invia_messaggio_privato, width=90)
 
                         with dpg.group(horizontal=True):
                             dpg.add_input_text(tag="file_field_privata", multiline=False, readonly=True, width=-120)
                             dpg.add_button(label="File", tag="btn_file_chat_privata", callback=select_private_file,
-                                           width=100)
+                                           width=90)
 
 
 def chiama_privato(is_you_calling):
