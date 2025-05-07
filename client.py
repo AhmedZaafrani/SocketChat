@@ -399,11 +399,11 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
             print(f"Socket ricezione audio in ascolto su porta {PORT_RICEZIONE_AUDIO}")
 
             # Binda e listen per i socket TCP
-            socket_comandi_input.bind(("0.0.0.0", PORT_RICEZIONE_COMANDI))
+            socket_comandi_input.bind(("0.0.0.0", PORT_RICEZIONE_COMANDI))  # Listen for incoming
             socket_comandi_input.listen(1)
             print(f"Socket comandi input in ascolto su porta {PORT_RICEZIONE_COMANDI}")
 
-            socket_comandi_output.bind(("0.0.0.0", PORT_INVIO_COMANDI))
+            socket_comandi_output.bind(("0.0.0.0", PORT_INVIO_COMANDI))  # Listen for incoming
             socket_comandi_output.listen(1)
             print(f"Socket comandi output in ascolto su porta {PORT_INVIO_COMANDI}")
 
@@ -1125,20 +1125,7 @@ def call(ip):  # vedi se ha pushato
                 return
 
             # Aspetta un possibile messaggio di sincronizzazione
-            try:
-                socket_chiamata.settimeout(5.0)
-                sync_message = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
-                print(f"Messaggio di sincronizzazione ricevuto: {sync_message}")
 
-                # Verifica se il messaggio è di tipo SOCKET_READY
-                if not sync_message.startswith("SOCKET_READY:"):
-                    print(f"Messaggio di sincronizzazione inatteso: {sync_message}")
-                    # Continua comunque, potrebbe essere un client vecchio
-            except socket.timeout:
-                print("Nessun messaggio di sincronizzazione ricevuto, continuo comunque")
-            except Exception as e:
-                print(f"Errore nella ricezione del messaggio di sincronizzazione: {e} - Linea {get_line_number()}")
-                # Continua comunque, è solo un miglioramento opzionale
 
             # Breve pausa prima di inizializzare i socket UDP
             time.sleep(0.5)
@@ -1175,12 +1162,12 @@ def call(ip):  # vedi se ha pushato
                 try:
                     # Aggiungi piccole pause tra i tentativi di connessione
                     time.sleep(0.3)
-                    socket_comandi_input.connect((ip, PORT_RICEZIONE_COMANDI))
+                    socket_comandi_input.bind(("0.0.0.0", PORT_RICEZIONE_COMANDI))
                     print(f"Connessione comandi input stabilita con {ip}:{PORT_RICEZIONE_COMANDI}")
 
                     time.sleep(0.3)
-                    socket_comandi_output.connect((ip, PORT_INVIO_COMANDI))
-                    print(f"Connessione comandi output stabilita con {ip}:{PORT_INVIO_COMANDI}")
+                    socket_comandi_output.connect((ip, PORT_RICEZIONE_COMANDI))
+                    print(f"Connessione comandi output stabilita con {ip}:{PORT_RICEZIONE_COMANDI}")
 
                     # Se tutte le connessioni sono riuscite, imposta il flag
                     connection_success = True
@@ -1293,6 +1280,8 @@ def gestisci_comandi_input_chiamata():
                         print("Comando di terminazione ricevuto")
                         termina_chiamata()
                         break
+                    else:
+                        continue
             except socket.timeout:
                 # Timeout normale, verifichiamo se la chiamata è ancora attiva
                 if not chiamata_in_corso:
