@@ -891,7 +891,7 @@ def listen_to_server():
                     # Non mostrare il messaggio privato nella chat globale
                     continue
 
-            if msg.startswith("IP:CALL:"): # risolto
+            if msg.startswith("IP:CALL:"):
                 keys = msg.split(':')
                 # risposta != "Nessun client con quel nome disponibile"
                 ip_utente_da_chiamare = keys[2]
@@ -901,7 +901,7 @@ def listen_to_server():
                 thread_chiama = threading.Thread(target=call, args=(ip_utente_da_chiamare,))
                 thread_chiama.start()
 
-            elif msg.startswith("IP:VIDEOCALL:"):
+            if msg.startswith("IP:VIDEOCALL:"):
                 keys = msg.split(':')
                 # risposta != "Nessun client con quel nome disponibile"
                 ip_utente_da_chiamare = keys[2]
@@ -912,7 +912,7 @@ def listen_to_server():
                 thread_chiama.start()
 
             # Gestione file in arrivo
-            elif msg == "sending_file":
+            if msg == "sending_file":
                 print("Rilevata notifica di invio file")
 
                 # Ricevi timestamp e nome utente
@@ -2536,8 +2536,8 @@ def mostra_finestra_chiamata(risposta):
         # Per videochiamate: finestra più larga per contenere i due video affiancati
         # Per chiamate solo audio: finestra più piccola
         if is_video:
-            call_window_width = 700  # Sufficiente per 2 video affiancati (320*2 + margini)
-            call_window_height = 430  # Altezza singolo video + controlli + margini
+            call_window_width = 660  # Sufficiente per 2 video affiancati (320*2 + margini)
+            call_window_height = 380  # Altezza singolo video + controlli + margini
         else:
             call_window_width = 400  # Finestra più piccola per solo audio
             call_window_height = 180  # Altezza ridotta per solo audio
@@ -2967,7 +2967,7 @@ def gestisci_ricezione_audio():
     """
     Gestisce la ricezione dell'audio durante una chiamata con gestione robusta errori.
     """
-    global chiamata_in_corso, socket_chiamata_ricezione_audio, ip_chiamata_destinatario
+    global chiamata_in_corso, socket_chiamata_ricezione_audio, ip_chiamata_destinatario, InputStream, OutputStream
 
     print("Avvio thread ricezione audio")
 
