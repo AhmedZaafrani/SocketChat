@@ -80,8 +80,6 @@ ip_chiamata_destinatario = ""
 # altre variabili globali
 
 chatlog_lock = threading.Lock()
-lock_audio = threading.Lock()
-lock_video = threading.Lock()
 chatlog = ""
 download_folders = {}  # username -> cartella di download per la chat
 client_socket = None
@@ -223,7 +221,7 @@ def setup_connection_server_FTP():
         print(f"Connessione FTP stabilita come {username}")
         return True
     except Exception as e:
-        print(f"Errore nella connessione FTP: {e}")
+        print(f"Errore nella connessione FTP: {e} - Linea {get_line_number()}")
         return False
 
 
@@ -248,7 +246,7 @@ def registrati():
 
         temp_socket.close()
     except Exception as e:
-        dpg.set_value("logerr", f"Errore durante la registrazione: {str(e)}")
+        dpg.set_value("logerr", f"Errore durante la registrazione: {str(e)} - Linea {get_line_number()}")
 
 def login():
     global client_socket, server_started, nome_utente_personale, call_requests_thread, termina_thread_listen_for_calls
@@ -317,7 +315,7 @@ def login():
             call_requests_thread.start()
 
         except Exception as e:
-            print(f"Errore nella configurazione del socket per le chiamate: {e}")
+            print(f"Errore nella configurazione del socket per le chiamate: {e} - Linea {get_line_number()}")
             # Non fallire il login se il socket per le chiamate non può essere configurato
 
         # Mostra la scheda di chat e abilita visivamente
@@ -335,7 +333,7 @@ def login():
         print(f"Login riuscito come {username}, GUI aggiornata")
 
     except Exception as e:
-        dpg.set_value("logerr", f"Errore durante il login: {str(e)}")
+        dpg.set_value("logerr", f"Errore durante il login: {str(e)} - Linea {get_line_number()}")
         if client_socket:
             client_socket.close()
 
@@ -415,7 +413,7 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
 
         except OSError as e:
             if e.errno == 48:  # Address already in use
-                print(f"Errore: porta già in uso. Potrebbe esserci una chiamata attiva non terminata correttamente.")
+                print(f"Errore: porta già in uso. Potrebbe esserci una chiamata attiva non terminata correttamente. Linea {get_line_number()}")
                 client.send("CALLREQUEST:ERROR".encode('utf-8'))
                 return
             raise
@@ -448,7 +446,7 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
                 # Timeout normale, continua
                 continue
             except Exception as e:
-                print(f"Errore durante l'accettazione delle connessioni TCP: {e}")
+                print(f"Errore durante l'accettazione delle connessioni TCP: {e} - Linea {get_line_number()}")
                 time.sleep(0.1)
 
         # Inizializza PyAudio
@@ -459,7 +457,7 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
             print("Moudlo p audio inizializzato con impostazioni standard")
 
         except Exception as e:
-            print(f"Errore nell'inizializzazione audio: {e}")
+            print(f"Errore nell'inizializzazione audio: {e} - Linea {get_line_number()}")
             # Tentativo di fallback con impostazioni minime
 
         if p:
@@ -474,7 +472,7 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
                 )
                 print("Stream audio inizializzato con impostazioni base")
             except Exception as e2:
-                print(f"Errore critico nell'inizializzazione audio: {e2}")
+                print(f"Errore critico nell'inizializzazione audio: {e2} - Linea {get_line_number()}")
 
             print("InputStream audio inizializzato correttamente")
 
@@ -489,7 +487,7 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
                 )
                 print("Stream audio inizializzato con impostazioni base")
             except Exception as e2:
-                print(f"Errore critico nell'inizializzazione audio: {e2}")
+                print(f"Errore critico nell'inizializzazione audio: {e2} - Linea {get_line_number()}")
 
             print("OutputStream audio inizializzato correttamente")
 
@@ -541,17 +539,17 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
             mostra_finestra_chiamata("ACCEPTED")
             print("Finestra di chiamata mostrata con successo")
         except Exception as e:
-            print(f"Errore nel mostrare la finestra di chiamata: {e}")
+            print(f"Errore nel mostrare la finestra di chiamata: {e} - Linea {get_line_number()}")
             # Tentiamo di nuovo dopo un breve ritardo
             time.sleep(0.5)
             try:
                 mostra_finestra_chiamata("ACCEPTED")
                 print("Secondo tentativo di mostrare la finestra riuscito")
             except Exception as e2:
-                print(f"Fallito anche il secondo tentativo: {e2}")
+                print(f"Fallito anche il secondo tentativo: {e2} - Linea {get_line_number()}")
 
     except Exception as e:
-        print(f"Errore nell'accettazione della chiamata: {e}")
+        print(f"Errore nell'accettazione della chiamata: {e} - Linea {get_line_number()}")
         if socket_chiamata:
             socket_chiamata.close()
             socket_chiamata = None
@@ -575,7 +573,7 @@ def rifiuta_chiamata(chiChiama, client):
         if dpg.does_item_exist("finestra_richiesta_chiamata"):
             dpg.delete_item("finestra_richiesta_chiamata")
     except Exception as e:
-        print(f"Errore nel rifiuto della chiamata: {e}")
+        print(f"Errore nel rifiuto della chiamata: {e} - Linea {get_line_number()}")
 
 
 def notifica_chiamata(chiChiama, client):
@@ -646,7 +644,7 @@ def notifica_chiamata(chiChiama, client):
         print(f"Finestra di notifica chiamata creata per {chiChiama}, tipo={call_type}")
 
     except Exception as e:
-        print(f"Errore nella creazione della finestra di notifica chiamata: {e}")
+        print(f"Errore nella creazione della finestra di notifica chiamata: {e} - Linea {get_line_number()}")
 
 
 def listen_for_call_request(socket_attesa_chiamate):
@@ -702,21 +700,21 @@ def listen_for_call_request(socket_attesa_chiamate):
                         print(f"Richiesta non riconosciuta: {request}")
                         client.close()
                 except socket.timeout:
-                    print("Timeout nella ricezione della richiesta")
+                    print("Timeout nella ricezione della richiesta - Linea {get_line_number()}")
                     client.close()
                 except Exception as e:
-                    print(f"Errore nella gestione della richiesta: {e}")
+                    print(f"Errore nella gestione della richiesta: {e} - Linea {get_line_number()}")
                     client.close()
 
             except socket.timeout:
                 # Timeout normale, continua
                 continue
             except Exception as e:
-                print(f"Errore accept socket: {e}")
+                print(f"Errore accept socket: {e} - Linea {get_line_number()}")
                 time.sleep(0.5)
                 continue
     except Exception as e:
-        print(f"Errore thread ascolto chiamate: {e}")
+        print(f"Errore thread ascolto chiamate: {e} - Linea {get_line_number()}")
     finally:
         # Chiudi il socket in modo sicuro alla fine
         try:
@@ -823,7 +821,7 @@ def listen_to_server():
                         print(f"Lista utenti aggiornata: {utenti_disponibili}")
                         continue  # Salta il resto del processing
                 except Exception as e:
-                    print(f"Errore nel parsing JSON: {e}")
+                    print(f"Errore nel parsing JSON: {e} - Linea {get_line_number()}")
                     # Se non è un JSON valido, procedi come messaggio normale
 
             # Gestione messaggi privati
@@ -863,7 +861,7 @@ def listen_to_server():
                         # Non processare oltre questo messaggio
                         continue
                     except Exception as e:
-                        print(f"Errore nell'elaborazione della notifica di file privato: {e}")
+                        print(f"Errore nell'elaborazione della notifica di file privato: {e} - Linea {get_line_number()}")
 
                 else:
                     _, private_msg = msg.split(":", 1)
@@ -944,7 +942,7 @@ def listen_to_server():
                     notifica_messaggio()
 
         except Exception as e:
-            print(f"Error in listen_to_server: {e}")
+            print(f"Error in listen_to_server: {e} - Linea {get_line_number()}")
             break
 
     print("Thread di ascolto terminato")
@@ -1007,21 +1005,21 @@ def call(ip):  # vedi se ha pushato
             socket_chiamata.connect((ip, PORT_CHIAMATE))
             print(f"Connessione stabilita con {ip}:{PORT_CHIAMATE}")
         except ConnectionRefusedError:
-            print(f"Connessione rifiutata da {ip}:{PORT_CHIAMATE}")
+            print(f"Connessione rifiutata da {ip}:{PORT_CHIAMATE} - Linea {get_line_number()}")
             mostra_finestra_chiamata("UNREACHABLE")
             # Riabilita i pulsanti
             dpg.configure_item("btn_videochiama_privato", enabled=True)
             dpg.configure_item("btn_chiama_privato", enabled=True)
             return
         except socket.timeout:
-            print(f"Timeout nella connessione a {ip}:{PORT_CHIAMATE}")
+            print(f"Timeout nella connessione a {ip}:{PORT_CHIAMATE} - Linea {get_line_number()}")
             mostra_finestra_chiamata("TIMEOUT")
             # Riabilita i pulsanti
             dpg.configure_item("btn_videochiama_privato", enabled=True)
             dpg.configure_item("btn_chiama_privato", enabled=True)
             return
         except Exception as e:
-            print(f"Errore di connessione: {e}")
+            print(f"Errore di connessione: {e} - Linea {get_line_number()}")
             mostra_finestra_chiamata("ERROR")
             # Riabilita i pulsanti
             dpg.configure_item("btn_videochiama_privato", enabled=True)
@@ -1051,7 +1049,7 @@ def call(ip):  # vedi se ha pushato
                 return
 
         except socket.timeout:
-            print("Timeout in attesa di risposta alla richiesta di chiamata")
+            print("Timeout in attesa di risposta alla richiesta di chiamata - Linea {get_line_number()}")
             # Chiudi il socket e mostra errore
             if socket_chiamata:
                 socket_chiamata.close()
@@ -1062,7 +1060,7 @@ def call(ip):  # vedi se ha pushato
             dpg.configure_item("btn_chiama_privato", enabled=True)
             return
         except Exception as e:
-            print(f"Errore nella ricezione della risposta: {e}")
+            print(f"Errore nella ricezione della risposta: {e} - Linea {get_line_number()}")
             # Chiudi il socket e mostra errore
             if socket_chiamata:
                 socket_chiamata.close()
@@ -1083,7 +1081,7 @@ def call(ip):  # vedi se ha pushato
                 print("Moudlo p audio inizializzato con impostazioni standard")
 
             except Exception as e:
-                print(f"Errore nell'inizializzazione audio: {e}")
+                print(f"Errore nell'inizializzazione audio: {e} - Linea {get_line_number()}")
                 # Tentativo di fallback con impostazioni minime
 
             if p:
@@ -1098,7 +1096,7 @@ def call(ip):  # vedi se ha pushato
                     )
                     print("Stream audio inizializzato con impostazioni base")
                 except Exception as e2:
-                    print(f"Errore critico nell'inizializzazione audio: {e2}")
+                    print(f"Errore critico nell'inizializzazione audio: {e2} - Linea {get_line_number()}")
 
                 print("InputStream audio inizializzato correttamente")
 
@@ -1113,7 +1111,7 @@ def call(ip):  # vedi se ha pushato
                     )
                     print("Stream audio inizializzato con impostazioni base")
                 except Exception as e2:
-                    print(f"Errore critico nell'inizializzazione audio: {e2}")
+                    print(f"Errore critico nell'inizializzazione audio: {e2} - Linea {get_line_number()}")
 
 
                 print("OutputStream audio inizializzato correttamente")
@@ -1139,7 +1137,7 @@ def call(ip):  # vedi se ha pushato
             except socket.timeout:
                 print("Nessun messaggio di sincronizzazione ricevuto, continuo comunque")
             except Exception as e:
-                print(f"Errore nella ricezione del messaggio di sincronizzazione: {e}")
+                print(f"Errore nella ricezione del messaggio di sincronizzazione: {e} - Linea {get_line_number()}")
                 # Continua comunque, è solo un miglioramento opzionale
 
             # Breve pausa prima di inizializzare i socket UDP
@@ -1189,7 +1187,7 @@ def call(ip):  # vedi se ha pushato
                     break
 
                 except Exception as e:
-                    print(f"Errore nella connessione dei socket di controllo (tentativo {retry + 1}/{max_retry}): {e}")
+                    print(f"Errore nella connessione dei socket di controllo (tentativo {retry + 1}/{max_retry}): {e} - Linea {get_line_number()}")
                     # Se non è l'ultimo tentativo, attendiamo e riproviamo
                     if retry < max_retry - 1:
                         time.sleep(1.0)  # Attesa più lunga tra i tentativi
@@ -1237,7 +1235,7 @@ def call(ip):  # vedi se ha pushato
             termina_chiamata(True)
 
     except Exception as e:
-        print(f"Errore generale durante la chiamata: {e}")
+        print(f"Errore generale durante la chiamata: {e} - Linea {get_line_number()}")
         mostra_finestra_chiamata("ERROR")
         termina_chiamata(True)
 
@@ -1261,7 +1259,7 @@ def verifica_connettivita(ip, porta, timeout=2):
         return result == 0
 
     except Exception as e:
-        print(f"Errore nel test di connettività: {e}")
+        print(f"Errore nel test di connettività: {e} - Linea {get_line_number()}")
         return False
 
 def gestisci_comandi_input_chiamata():
@@ -1304,13 +1302,13 @@ def gestisci_comandi_input_chiamata():
                 termina_chiamata()
                 break
             except Exception as e:
-                print(f"Errore ricezione comando: {e}")
+                print(f"Errore ricezione comando: {e} - Linea {get_line_number()}")
                 # Non terminiamo immediatamente per errori temporanei
                 time.sleep(0.1)
                 continue
 
         except Exception as e:
-            print(f"Errore gestione comandi input: {e}")
+            print(f"Errore gestione comandi input: {e} - Linea {get_line_number()}")
             if not chiamata_in_corso:
                 break
             time.sleep(0.1)
@@ -1368,7 +1366,7 @@ def get_low_latency_settings():
             return None
 
     except Exception as e:
-        print(f"Avviso: Impossibile creare impostazioni a bassa latenza: {e}")
+        print(f"Avviso: Impossibile creare impostazioni a bassa latenza: {e} - Linea {get_line_number()}")
         return None
 
 
@@ -1399,7 +1397,7 @@ def get_low_latency_settings():
             # (questo è uno stub perché pyaudio non fornisce un'API specifica)
             return None
     except Exception as e:
-        print(f"Avviso: Impossibile creare impostazioni a bassa latenza: {e}")
+        print(f"Avviso: Impossibile creare impostazioni a bassa latenza: {e} - Linea {get_line_number()}")
 
     return None
 
@@ -1466,7 +1464,7 @@ def detect_mobile_hotspot(ip):
                 return True
 
     except Exception as e:
-        print(f"Errore nel rilevamento hotspot: {e}")
+        print(f"Errore nel rilevamento hotspot: {e} - Linea {get_line_number()}")
 
     return False
 
@@ -1505,14 +1503,14 @@ def gestisci_comandi_chiamata():
                     continue
                 except Exception as e:
                     # Ignora altri errori di rete
-                    print(f"Errore ricezione comando: {e}")
+                    print(f"Errore ricezione comando: {e} - Linea {get_line_number()}")
                     if not chiamata_in_corso:
                         break
                     time.sleep(0.1)
                     continue
 
             except Exception as e:
-                print(f"Errore gestione comandi: {e}")
+                print(f"Errore gestione comandi: {e} - Linea {get_line_number()}")
                 if not chiamata_in_corso:
                     break
                 time.sleep(0.1)
@@ -1521,7 +1519,7 @@ def gestisci_comandi_chiamata():
             time.sleep(0.05)
 
     except Exception as e:
-        print(f"Errore critico thread comandi: {e}")
+        print(f"Errore critico thread comandi: {e} - Linea {get_line_number()}")
     finally:
         print("Thread comandi terminato")
 
@@ -1567,7 +1565,7 @@ def videocall(ip):
             socket_chiamata.connect((ip, PORT_CHIAMATE))
             print(f"Connessione stabilita con {ip}:{PORT_CHIAMATE}")
         except Exception as e:
-            print(f"Impossibile connettersi all'utente: {e}")
+            print(f"Impossibile connettersi all'utente: {e} - Linea {get_line_number()}")
             mostra_finestra_chiamata("UNREACHABLE")
             # Riabilita i pulsanti
             dpg.configure_item("btn_videochiama_privato", enabled=True)
@@ -1596,7 +1594,7 @@ def videocall(ip):
                 return
 
         except Exception as e:
-            print(f"Timeout o errore nella risposta: {e}")
+            print(f"Timeout o errore nella risposta: {e} - Linea {get_line_number()}")
             if socket_chiamata:
                 socket_chiamata.close()
                 socket_chiamata = None
@@ -1615,7 +1613,7 @@ def videocall(ip):
                 print("Moudlo p audio inizializzato con impostazioni standard")
 
             except Exception as e:
-                print(f"Errore nell'inizializzazione audio: {e}")
+                print(f"Errore nell'inizializzazione audio: {e} - Linea {get_line_number()}")
                 # Tentativo di fallback con impostazioni minime
 
             if p:
@@ -1630,7 +1628,7 @@ def videocall(ip):
                     )
                     print("Stream audio inizializzato con impostazioni base")
                 except Exception as e2:
-                    print(f"Errore critico nell'inizializzazione audio: {e2}")
+                    print(f"Errore critico nell'inizializzazione audio: {e2} - Linea {get_line_number()}")
 
                 print("InputStream audio inizializzato correttamente")
 
@@ -1645,7 +1643,7 @@ def videocall(ip):
                     )
                     print("Stream audio inizializzato con impostazioni base")
                 except Exception as e2:
-                    print(f"Errore critico nell'inizializzazione audio: {e2}")
+                    print(f"Errore critico nell'inizializzazione audio: {e2} - Linea {get_line_number()}")
 
                 print("OutputStream audio inizializzato correttamente")
 
@@ -1694,7 +1692,7 @@ def videocall(ip):
                 socket_comandi_output.connect((ip, PORT_INVIO_COMANDI))
                 print(f"Connessione comandi output stabilita con {ip}:{PORT_INVIO_COMANDI}")
             except Exception as e:
-                print(f"Errore nella connessione dei socket di controllo: {e}")
+                print(f"Errore nella connessione dei socket di controllo: {e} - Linea {get_line_number()}")
                 mostra_finestra_chiamata("ERROR")
                 termina_chiamata(True)
                 return
@@ -1713,7 +1711,7 @@ def videocall(ip):
                 else:
                     print("Webcam inizializzata con successo")
             except Exception as e:
-                print(f"Errore nell'inizializzazione della webcam: {e}")
+                print(f"Errore nell'inizializzazione della webcam: {e} - Linea {get_line_number()}")
                 # Continuiamo comunque, potrebbe essere solo audio
 
             # Avvia thread
@@ -1744,7 +1742,7 @@ def videocall(ip):
             termina_chiamata(True)
 
     except Exception as e:
-        print(f"Errore nella videochiamata: {e}")
+        print(f"Errore nella videochiamata: {e} - Linea {get_line_number()}")
         mostra_finestra_chiamata("ERROR")
         termina_chiamata(True)
 
@@ -1798,7 +1796,7 @@ def download_private_file(sender, filename, timestamp, notification_message):
                     break
 
             except Exception as e:
-                print(f"Errore tentativo {attempt + 1}: {e}")
+                print(f"Errore tentativo {attempt + 1}: {e} - Linea {get_line_number()}")
                 time.sleep(2)
 
         # Aggiorna la chat in base al risultato
@@ -1816,13 +1814,13 @@ def download_private_file(sender, filename, timestamp, notification_message):
                 else:  # Linux e altri sistemi
                     subprocess.Popen(['xdg-open', os.path.dirname(file_path)])
             except Exception as e:
-                print(f"Errore nell'apertura del file explorer: {e}")
+                print(f"Errore nell'apertura del file explorer: {e} - Linea {get_line_number()}")
         else:
             error_msg = f"\n{timestamp} - {sender} --> Impossibile scaricare il file {filename} dopo {max_attempts} tentativi"
             update_private_chat(sender, notification_message, error_msg)
 
     except Exception as e:
-        print(f"Errore globale durante il download del file privato: {e}")
+        print(f"Errore globale durante il download del file privato: {e} - Linea {get_line_number()}")
         error_msg = f"\n{timestamp} - {sender} --> Errore durante il download di {filename}: {str(e)}"
         update_private_chat(sender, notification_message, error_msg)
 
@@ -1899,7 +1897,7 @@ def download_file(time_stamp_and_user_name, filename):
                 break
 
             except Exception as e:
-                print(f"Errore durante il tentativo {attempt + 1} di download: {e}")
+                print(f"Errore durante il tentativo {attempt + 1} di download: {e} - Linea {get_line_number()}")
                 time.sleep(2)  # Attesa tra i tentativi
 
         # Verifica se il file esiste e ha dimensione > 0
@@ -1926,7 +1924,7 @@ def download_file(time_stamp_and_user_name, filename):
                     dpg.set_value("chatlog_field", chatlog)
 
             except Exception as e:
-                print(f"Errore nell'apertura del file explorer: {e}")
+                print(f"Errore nell'apertura del file explorer: {e} - Linea {get_line_number()}")
         else:
             print(f"Download fallito: file {filename} non trovato o vuoto")
             # Aggiorna comunque il log della chat
@@ -1935,7 +1933,7 @@ def download_file(time_stamp_and_user_name, filename):
                 dpg.set_value("chatlog_field", chatlog)
 
     except Exception as e:
-        print(f"Errore durante il download del file: {e}")
+        print(f"Errore durante il download del file: {e} - Linea {get_line_number()}")
         # Aggiorna il log della chat anche in caso di errore
         with chatlog_lock:
             chatlog = chatlog + "\n" + time_stamp_and_user_name + f": Ha inviato un file ({filename}) - Errore nel download"
@@ -2011,7 +2009,7 @@ def invia():
             dpg.set_value("logerr", "")
 
         except Exception as e:
-            error_msg = f"Errore nell'invio del file: {e}"
+            error_msg = f"Errore nell'invio del file: {e} - Linea {get_line_number()}"
             print(error_msg)
             dpg.set_value("logerr", error_msg)
 
@@ -2033,7 +2031,7 @@ def invia():
             dpg.set_value("input_txt", "")
 
         except Exception as e:
-            error_msg = f"Errore durante l'invio del messaggio: {str(e)}"
+            error_msg = f"Errore durante l'invio del messaggio: {str(e)} - Linea {get_line_number()}"
             print(error_msg)
             dpg.set_value("logerr", error_msg)
 
@@ -2068,7 +2066,7 @@ def seleziona_cartella_download():
             # Esegui AppleScript
             subprocess.run(["osascript", "-e", applescript], check=False)
         except Exception as e:
-            print(f"Errore nell'esecuzione di AppleScript: {e}")
+            print(f"Errore nell'esecuzione di AppleScript: {e} - Linea {get_line_number()}")
     else:
         # Per Windows e altri sistemi, usa il metodo Tkinter come prima
         script_file = tempfile.mktemp(suffix='.py')
@@ -2244,7 +2242,7 @@ def carica_file():
             # Esegui AppleScript
             subprocess.run(["osascript", "-e", applescript], check=False)
         except Exception as e:
-            print(f"Errore nell'esecuzione di AppleScript: {e}")
+            print(f"Errore nell'esecuzione di AppleScript: {e} - Linea {get_line_number()}")
     else:
         # Per Windows e altri sistemi, usa il metodo Tkinter come prima
         script_file = tempfile.mktemp(suffix='.py')
@@ -2427,7 +2425,7 @@ def chiama_privato(is_you_calling):
             client_socket.send(comando.encode('utf-8'))
 
     except Exception as e:
-        print(f"Errore nella richiesta di chiamata: {e}")
+        print(f"Errore nella richiesta di chiamata: {e} - Linea {get_line_number()}")
         dpg.configure_item("btn_chiama_privato", enabled=True)
         dpg.configure_item("btn_videochiama_privato", enabled=True)
 
@@ -2452,7 +2450,7 @@ def videochiama_privato(is_you_calling):  # se sei tu a chiamare allora t aspett
             print(f"Richiedo IP per videochiamare {utente_da_chiamare}")
             client_socket.send(comando.encode('utf-8'))
     except Exception as e:
-        print(f"Errore nella richiesta di videochiamata: {e}")
+        print(f"Errore nella richiesta di videochiamata: {e} - Linea {get_line_number()}")
         dpg.configure_item("btn_chiama_privato", enabled=True)
         dpg.configure_item("btn_videochiama_privato", enabled=True)
 
@@ -2524,7 +2522,7 @@ def mostra_finestra_chiamata(risposta):
 
             print(f"Finestra di errore creata: {title}")
         except Exception as e:
-            print(f"Errore nella creazione della finestra di errore: {e}")
+            print(f"Errore nella creazione della finestra di errore: {e} - Linea {get_line_number()}")
 
         # Riabilitiamo i pulsanti di chiamata
         dpg.configure_item("btn_videochiama_privato", enabled=True)
@@ -2664,7 +2662,7 @@ def mostra_finestra_chiamata(risposta):
 
         print(f"Finestra di chiamata creata per {utente_in_chiamata}, tipo: {risposta}")
     except Exception as e:
-        print(f"Errore nella creazione della finestra di chiamata: {e}")
+        print(f"Errore nella creazione della finestra di chiamata: {e} - Linea {get_line_number()}")
         # In caso di errore, riabilitiamo comunque i pulsanti
         dpg.configure_item("btn_videochiama_privato", enabled=True)
         dpg.configure_item("btn_chiama_privato", enabled=True)
@@ -2804,13 +2802,13 @@ def gestisci_invio_video():
                 if sequence % 300 == 0:
                     print(f"Video: inviati {sequence} frames, ultimo size={size} bytes")
             except Exception as e:
-                print(f"Errore nell'invio del frame: {e}")
+                print(f"Errore nell'invio del frame: {e} - Linea {get_line_number()}")
 
             # Brief sleep to reduce CPU usage
             time.sleep(0.001)
 
     except Exception as e:
-        print(f"Errore nella gestione video: {e}")
+        print(f"Errore nella gestione video: {e} - Linea {get_line_number()}")
     finally:
         print("Thread invio video terminato")
 
@@ -2863,7 +2861,7 @@ def gestisci_ricezione_video():
                         aggiorna_video_remoto(frame_remoto)
                         frames_received += 1
                 except Exception as e:
-                    print(f"Errore nella decodifica del frame: {e}")
+                    print(f"Errore nella decodifica del frame: {e} - Linea {get_line_number()}")
 
                 # Print statistics every 5 seconds
                 if time.time() - last_stats_time > 5.0:
@@ -2875,11 +2873,11 @@ def gestisci_ricezione_video():
                 # Normal timeout, just continue
                 pass
             except Exception as e:
-                print(f"Errore ricezione video: {e}")
+                print(f"Errore ricezione video: {e} - Linea {get_line_number()}")
                 time.sleep(0.01)  # Small pause on errors
 
     except Exception as e:
-        print(f"Errore critico nel thread ricezione video: {e}")
+        print(f"Errore critico nel thread ricezione video: {e} - Linea {get_line_number()}")
     finally:
         print("Thread ricezione video terminato")
 
@@ -2921,18 +2919,18 @@ def gestisci_invio_audio():
                     last_stats_time = time.time()
 
             except IOError as e:
-                print(f"Errore lettura audio: {e}")
+                print(f"Errore lettura audio: {e} - Linea {get_line_number()}")
                 time.sleep(0.01)
 
             except Exception as e:
-                print(f"Errore invio audio: {e}")
+                print(f"Errore invio audio: {e} - Linea {get_line_number()}")
                 time.sleep(0.01)
 
             # Short sleep to avoid CPU overuse
             time.sleep(0.001)
 
     except Exception as e:
-        print(f"Errore critico thread audio: {e}")
+        print(f"Errore critico thread audio: {e} - Linea {get_line_number()}")
     finally:
         print("Thread invio audio terminato")
 
@@ -3006,7 +3004,7 @@ def gestisci_ricezione_audio():
             except socket.timeout:
                 continue
     except Exception as e:
-        debug_log(f"Eccezione in thread ricezione audio: {e}")
+        debug_log(f"Eccezione in thread ricezione audio: {e} - Linea {get_line_number()}")
     finally:
         print("Thread ricezione audio terminato")
         if chiamata_in_corso:
@@ -3039,7 +3037,7 @@ def termina_chiamata(from_error=False):
             socket_comandi_output.sendall(b"TERMINA")
             debug_log("Comando terminazione inviato")
     except Exception as e:
-        debug_log(f"Errore invio comando: {str(e)}")
+        debug_log(f"Errore invio comando: {str(e)} - Linea {get_line_number()}")
 
     sockets = [socket_chiamata, socket_comandi_input, socket_comandi_output, socket_chiamata_invio_audio, socket_chiamata_ricezione_audio]
 
@@ -3053,7 +3051,7 @@ def termina_chiamata(from_error=False):
                 sock.close()
                 debug_log(f"Socket {sock.getsockname()} chiuso")
         except Exception as e:
-            debug_log(f"Errore chiusura socket: {str(e)}")
+            debug_log(f"Errore chiusura socket: {str(e)} - Linea {get_line_number()}")
 
     # Chiusura ordinata risorse PyAudio e VideoCapture
     if VideoCapture:
@@ -3136,9 +3134,9 @@ def termina_chiamata(from_error=False):
             call_thread.start()
             call_requests_thread = call_thread
         except OSError as e:
-            print(f"Impossibile ricreare socket di ascolto: {e}")
+            print(f"Impossibile ricreare socket di ascolto: {e} - Linea {get_line_number()}")
     except Exception as e:
-        print(f"Errore nel riavvio del socket di ascolto: {e}")
+        print(f"Errore nel riavvio del socket di ascolto: {e} - Linea {get_line_number()}")
 
     print("Terminazione chiamata completata")
 
@@ -3174,7 +3172,7 @@ def select_private_file():
             # Esegui AppleScript
             subprocess.run(["osascript", "-e", applescript], check=False)
         except Exception as e:
-            print(f"Errore nell'esecuzione di AppleScript: {e}")
+            print(f"Errore nell'esecuzione di AppleScript: {e} - Linea {get_line_number()}")
     else:
         # Per Windows e altri sistemi, usa il metodo Tkinter come prima
         script_file = tempfile.mktemp(suffix='.py')
@@ -3290,7 +3288,7 @@ def invia_messaggio_privato():
             dpg.set_value("file_field_privata", "")
 
         except Exception as e:
-            error_msg = f"Errore nell'invio del file: {e}"
+            error_msg = f"Errore nell'invio del file: {e} - Linea {get_line_number()}"
             dpg.set_value("logerr", error_msg)
 
             # Aggiorna il log con l'errore
@@ -3312,7 +3310,7 @@ def invia_messaggio_privato():
             dpg.set_value("input_txt_chat_privata", "")
 
         except Exception as e:
-            error_msg = f"Errore durante l'invio del messaggio: {str(e)}"
+            error_msg = f"Errore durante l'invio del messaggio: {str(e)} - Linea {get_line_number()}"
             dpg.set_value("logerr", error_msg)
 
 
