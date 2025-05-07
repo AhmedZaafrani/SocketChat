@@ -14,7 +14,7 @@ clients = []
 active_users = {}  # username -> socket
 lock = threading.Lock()
 USERS_FILE = "users.json"
-SERVER_IP = "0.0.0.0"
+SERVER_IP = '127.0.0.1'
 PORT = 12345
 MAX_CONNECTIONS = 10
 authorizer = None
@@ -29,7 +29,7 @@ def setup_server_FTP():
     # Itera sulle coppie chiave-valore (username, password)
     for username, password in dict.items():
         # Crea la directory home se non esiste
-        home_dir = "file_directory_ftp"
+        home_dir = "/Users/simo/Documents/GitHub/Senza nome/SocketChat/file_directory_ftp"
         if not os.path.exists(home_dir):
             try:
                 os.makedirs(home_dir)
@@ -61,7 +61,7 @@ def setup_server_FTP():
     handler.banner = "FTP Server pronto"
 
     try:
-        server_FTP = FTPServer((SERVER_IP, 12346), handler)
+        server_FTP = FTPServer(("0.0.0.0", 12346), handler)
         print("Server FTP inizializzato correttamente")
         server_FTP.serve_forever()
     except Exception as e:
@@ -147,7 +147,6 @@ def handle_client_connection(client, address):
         elif data.startswith("LOGIN:"):
             _, username, password = data.split(":", 2)
             success, message = authenticate_user(username, password)
-            print(f"message di login: {message}")
             client.send(message.encode('utf-8'))
             print(f"Login: {username} - {message}")  # Debug
             if not success:
@@ -157,8 +156,6 @@ def handle_client_connection(client, address):
             client.send("Comando non valido".encode('utf-8'))
             client.close()
             return
-
-        time.sleep(0.5)
 
         # Se arriviamo qui, l'utente è autenticato
         with lock:
@@ -242,23 +239,10 @@ def handle_client_connection(client, address):
 
                         except Exception as e:
                             print(f"Errore nella gestione del file privato: {e}")
-                    elif "IP_REQUEST" in message: #FORMATO --> PRIVATE:IP_REQUEST:NOME:TYPE (TYPE BOOL) (type indica chiamata o no)
-                        print(f"IP REQUEST MESSAGE {message}")
-                        parts = message.split(":")
-                        nome_utente_richiesto = parts[2]
-                        if nome_utente_richiesto in active_users.keys():
-                            recipient_socket = active_users[nome_utente_richiesto]
-                            recipient_ip = recipient_socket.getpeername()[0]
-                            if parts[3] == "False":
-                                client.send(f"IP:CALL:{recipient_ip}".encode('utf-8'))
-                            else:
-                                client.send(f"IP:VIDEOCALL:{recipient_ip}".encode('utf-8'))
-                        else:
-                            client.send("Nessun client con quel nome disponibile".encode('utf-8'))
                     else:
                         try:
                             # Gestione messaggi privati normali
-                            parts = message.split(":")
+                            parts = message.split(":", 2)
                             if len(parts) == 3:
                                 _, recipient, content = parts
                                 print(f"Etrato in modalit private con recipient {recipient}")
@@ -276,7 +260,6 @@ def handle_client_connection(client, address):
                                     # Il server non tiene conto della cronologia della chat per evitare problemi di sicurezza
                                 else:
                                     client.send(f"ERROR: L'utente {recipient} non è connesso".encode('utf-8'))
-
                         except Exception as e:
                             print(f"Errore nell'invio del messaggio privato: {e}")
                 else:
@@ -373,8 +356,8 @@ def distribute_file_to_clients(sender_client, filename, username):
     fail_count = 0
 
     for client in client_list:
-        if client == sender_client:
-            continue  # Salta il client che ha inviato il file
+        #if client == sender_client:
+       #     continue  # Salta il client che ha inviato il file
 
         try:
             # Invia notifica di file in arrivo
@@ -387,7 +370,7 @@ def distribute_file_to_clients(sender_client, filename, username):
             client.send(f"{timestamp} - {username}".encode('utf-8'))
 
             # Breve pausa per assicurarsi che il client processi il messaggio
-            time.sleep(0.5)
+            time.sleep(0.1)
 
             # Invia nome del file
             client.send(filename.encode('utf-8'))

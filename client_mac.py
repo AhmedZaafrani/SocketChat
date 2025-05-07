@@ -1,4 +1,3 @@
-import inspect
 import json
 import os
 import sys
@@ -15,7 +14,7 @@ from pyftpdlib.servers import FTPServer
 import platform
 import subprocess
 import time
-import re  # Aggiungi qui
+
 
 #import per le chiamate e le videochiamate
 import pyaudio # con questo modulo gestisco l'audio in input e in output
@@ -29,31 +28,20 @@ import dearpygui.dearpygui as dpg
 from tkfilebrowser import askopendirname, askopenfilename
 from dearpygui.dearpygui import configure_item
 
-# Variabili per il controllo della frequenza di aggiornamento della UI
-UI_UPDATE_INTERVAL = 0.1  # Intervallo in secondi per aggiornare l'interfaccia utente
-last_ui_update_time = 0  # Timestamp dell'ultimo aggiornamento UI
 
 # Costanti per le chiamate e le videochiamate
-# Miglioramento della qualità audio
-CHUNK = 512  # Ridotto da 1024 per ridurre la latenza audio
+CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNEL = 1
 RATE = 44100 # valore che consiglia la documentazione
 PORT_CHIAMATE = 12347
-PORT_RICEZIONE_COMANDI = 12353
-PORT_INVIO_COMANDI = 12354
-PORT_INVIO_AUDIO = 12349
-PORT_INVIO_VIDEO = 12350
-PORT_RICEZIONE_AUDIO = 12351
-PORT_RICEZIONE_VIDEO = 12352
 PORT_ATTESA_CHIAMATE = 12348
 
 # Altre costanti
 
 SERVER_IP = "172.20.10.3" #ip server a cui collegarsi
 DEFAULT_PORT = 12345
-BUFFER_SIZE = 4096  # Aumentato da 1024 per migliorare la stabilità
-call_requests_thread = None
+BUFFER_SIZE = 1024
 
 dpg.create_context()
 dpg.create_viewport(title='Socket Chat', width=950, height=800)
@@ -61,17 +49,11 @@ dpg.create_viewport(title='Socket Chat', width=950, height=800)
 # variabili globali per le chiamate e le videochiamate
 
 chiamata_in_corso = False
-DEBUG_MODE = True  # Attiva/disattiva log dettagliato
 socket_chiamata = None
-socket_chiamata_invio_audio = None
-socket_chiamata_invio_video = None
-socket_chiamata_ricezione_audio = None
-socket_chiamata_ricezione_video = None
 is_video = False
 is_audio_on = True
 is_video_on = True
-InputStream = None
-OutputStream = None
+audioStream = None
 VideoCapture = None
 p = None # istanza di pyaudio
 utente_in_chiamata = ""
@@ -87,7 +69,6 @@ server_started = False
 nome_utente_personale = ""
 ftp_server = None
 ftp_client = None
-termina_thread_listen_for_calls = True
 
 # Variabile globale per tracciare lo stato
 file_selection_in_progress = False
@@ -102,19 +83,6 @@ utenti_disponibili = []  # Lista di utenti disponibili
 chat_attive = {}  # username -> cronologia chat
 username_client_chat_corrente = ""  # Username del contatto attualmente selezionato
 
-if os.name == 'nt':  # Windows
-    try:
-        import win32api, win32process, win32com
-    except ImportError:
-        pass  # Gestiremo questo caso nella funzione set_thread_priority
-
-def debug_log(message):
-    if DEBUG_MODE:
-        print(f"[DEBUG] {datetime.datetime.now().strftime('%H:%M:%S.%f')} - {message}")
-
-def get_line_number():
-    frame = inspect.currentframe().f_back
-    return frame.f_lineno
 
 def get_chat_download_folder(username):
     """Restituisce la cartella dedicata per i download di una specifica chat"""
@@ -145,48 +113,6 @@ def get_chat_download_folder(username):
 
     return chat_folder
 
-
-def set_thread_priority(thread_type="audio"):
-    """Imposta la priorità del thread corrente in base al tipo.
-    Versione robusta che non richiede win32com.
-
-    Args:
-        thread_type: Tipo di thread ("audio", "video", o "ui")
-    """
-    # Solo su Windows possiamo impostare la priorità
-    if os.name == 'nt':
-        try:
-            # Verifica che i moduli di base siano importati
-            if 'win32api' not in globals() or 'win32process' not in globals():
-                print(f"Moduli Windows API di base non disponibili per impostare priorità thread {thread_type}")
-                return
-
-            # Costanti per i valori di priorità dei thread in Windows
-            # Se win32com non è disponibile, definiamo direttamente le costanti necessarie
-            THREAD_SET_INFORMATION = 0x0020  # Valore standard per THREAD_SET_INFORMATION
-
-            thread_id = win32api.GetCurrentThreadId()
-            thread_handle = win32api.OpenThread(THREAD_SET_INFORMATION, False, thread_id)
-
-            # Impostazione della priorità in base al tipo di thread
-            if thread_type == "audio":
-                # Massima priorità per l'audio
-                win32process.SetThreadPriority(thread_handle, win32process.THREAD_PRIORITY_TIME_CRITICAL)
-                print(f"Priorità thread audio impostata a THREAD_PRIORITY_TIME_CRITICAL")
-            elif thread_type == "video":
-                # Alta priorità per il video
-                win32process.SetThreadPriority(thread_handle, win32process.THREAD_PRIORITY_HIGHEST)
-                print(f"Priorità thread video impostata a THREAD_PRIORITY_HIGHEST")
-            elif thread_type == "ui":
-                # Priorità normale per l'UI
-                win32process.SetThreadPriority(thread_handle, win32process.THREAD_PRIORITY_NORMAL)
-                print(f"Priorità thread UI impostata a THREAD_PRIORITY_NORMAL")
-
-        except ImportError as e:
-            print(f"Moduli Windows non disponibili: {e} - Linea {get_line_number()}")
-        except Exception as e:
-            print(f"Errore nell'impostazione della priorità del thread {thread_type}: {e} - Linea {get_line_number()}")
-            # Non blocchiamo l'esecuzione per questo errore
 
 def setup_connection_server_FTP():
     global ftp_server
@@ -221,7 +147,7 @@ def setup_connection_server_FTP():
         print(f"Connessione FTP stabilita come {username}")
         return True
     except Exception as e:
-        print(f"Errore nella connessione FTP: {e} - Linea {get_line_number()}")
+        print(f"Errore nella connessione FTP: {e}")
         return False
 
 
@@ -246,10 +172,11 @@ def registrati():
 
         temp_socket.close()
     except Exception as e:
-        dpg.set_value("logerr", f"Errore durante la registrazione: {str(e)} - Linea {get_line_number()}")
+        dpg.set_value("logerr", f"Errore durante la registrazione: {str(e)}")
+
 
 def login():
-    global client_socket, server_started, nome_utente_personale, call_requests_thread, termina_thread_listen_for_calls
+    global client_socket, server_started, nome_utente_personale
     username = dpg.get_value("username")
     password = dpg.get_value("password")
 
@@ -267,7 +194,7 @@ def login():
         client_socket.send(f"LOGIN:{username}:{password}".encode("utf-8"))
 
         # Ricevi risposta
-        response = client_socket.recv(BUFFER_SIZE).decode("utf-8")
+        response = client_socket.recv(1024).decode("utf-8")
         splittedResponse = response.split(':', 1)
 
         if splittedResponse[0] != "Autenticazione riuscita":
@@ -292,18 +219,12 @@ def login():
 
         # Configura socket per le chiamate in arrivo
         try:
-            # Ferma qualsiasi thread di ascolto precedente
-            termina_thread_listen_for_calls = True
-            if call_requests_thread and call_requests_thread.is_alive():
-                time.sleep(1.0)
-            termina_thread_listen_for_calls = False
-
             # Crea il socket
             socket_attesa_chiamate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             socket_attesa_chiamate.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             socket_attesa_chiamate.settimeout(1.0)  # Socket non bloccante
 
-            # Legati a PORT_CHIAMATE
+            # Legati a PORT_CHIAMATE (non PORT_ATTESA_CHIAMATE)
             socket_attesa_chiamate.bind(("0.0.0.0", PORT_CHIAMATE))
             socket_attesa_chiamate.listen(1)
 
@@ -315,7 +236,7 @@ def login():
             call_requests_thread.start()
 
         except Exception as e:
-            print(f"Errore nella configurazione del socket per le chiamate: {e} - Linea {get_line_number()}")
+            print(f"Errore nella configurazione del socket per le chiamate: {e}")
             # Non fallire il login se il socket per le chiamate non può essere configurato
 
         # Mostra la scheda di chat e abilita visivamente
@@ -333,7 +254,7 @@ def login():
         print(f"Login riuscito come {username}, GUI aggiornata")
 
     except Exception as e:
-        dpg.set_value("logerr", f"Errore durante il login: {str(e)} - Linea {get_line_number()}")
+        dpg.set_value("logerr", f"Errore durante il login: {str(e)}")
         if client_socket:
             client_socket.close()
 
@@ -341,11 +262,8 @@ def login():
 def accetta_chiamata(chiChiama, is_videochiamata, client):
     """
     Accetta una chiamata in arrivo e inizializza le risorse audio/video.
-    Versione UDP per audio e video.
     """
-    global socket_chiamata, chiamata_in_corso, p, InputStream, OutputStream, VideoCapture, is_video, utente_in_chiamata
-    global socket_chiamata_invio_audio, socket_chiamata_invio_video, socket_chiamata_ricezione_audio, socket_chiamata_ricezione_video
-    global socket_comandi_input, socket_comandi_output, ip_chiamata_destinatario
+    global socket_chiamata, chiamata_in_corso, p, audioStream, VideoCapture, is_video, utente_in_chiamata
 
     try:
         print(f"Accettando chiamata da {chiChiama}, video={is_videochiamata}")
@@ -359,152 +277,27 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
 
         # Imposta le variabili globali
         socket_chiamata = client
-        ip_chiamata_destinatario = client.getpeername()[0]
-        print(f"IP del chiamante: {ip_chiamata_destinatario}")
         chiamata_in_corso = True
         is_video = is_videochiamata
         utente_in_chiamata = chiChiama
 
-        # Crea tutti i socket necessari
-        # Socket UDP per audio
-        socket_chiamata_invio_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-
-        socket_chiamata_ricezione_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
-        socket_chiamata_ricezione_audio.settimeout(0.1)  # Aggiungi timeout per non bloccare
-
-        # TCP per comandi (mantenere TCP per comandi è più semplice)
-        socket_comandi_input = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket_comandi_input.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        socket_comandi_input.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
-
-        socket_comandi_output = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket_comandi_output.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        socket_comandi_output.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-
-        if is_videochiamata:
-            socket_chiamata_invio_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            socket_chiamata_invio_video.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,
-                                                   262144)  # Buffer più grande per video
-
-            socket_chiamata_ricezione_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            socket_chiamata_ricezione_video.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
-            socket_chiamata_ricezione_video.settimeout(0.1)  # Aggiungi timeout per non bloccare
-
-        # Configura i socket per attendere connessioni
-        try:
-            # Binda i socket UDP di ricezione (senza listen)
-            socket_chiamata_ricezione_audio.bind(("0.0.0.0", PORT_RICEZIONE_AUDIO))
-            print(f"Socket ricezione audio in ascolto su porta {PORT_RICEZIONE_AUDIO}")
-
-            # Binda e listen per i socket TCP
-            socket_comandi_input.bind(("0.0.0.0", PORT_RICEZIONE_COMANDI))  # Listen for incoming
-            socket_comandi_input.listen(1)
-            print(f"Socket comandi input in ascolto su porta {PORT_RICEZIONE_COMANDI}")
-
-            socket_comandi_output.bind(("0.0.0.0", PORT_INVIO_COMANDI))  # Listen for incoming
-            socket_comandi_output.listen(1)
-            print(f"Socket comandi output in ascolto su porta {PORT_INVIO_COMANDI}")
-
-            if is_videochiamata:
-                socket_chiamata_ricezione_video.bind(("0.0.0.0", PORT_RICEZIONE_VIDEO))
-                print(f"Socket ricezione video in ascolto su porta {PORT_RICEZIONE_VIDEO}")
-
-        except OSError as e:
-            if e.errno == 48:  # Address already in use
-                print(f"Errore: porta già in uso. Potrebbe esserci una chiamata attiva non terminata correttamente. Linea {get_line_number()}")
-                client.send("CALLREQUEST:ERROR".encode('utf-8'))
-                return
-            raise
-
-        # Per i socket TCP, dobbiamo accettare le connessioni
-        print("In attesa di connessioni dai socket TCP...")
-        timeout = time.time() + 10  # 10 secondi di timeout
-
-        socket_comandi_input_conn = None
-        socket_comandi_output_conn = None
-
-        while time.time() < timeout:
-            try:
-                if not socket_comandi_input_conn:
-                    socket_comandi_input.settimeout(0.5)
-                    socket_comandi_input_conn, _ = socket_comandi_input.accept()
-                    print(f"Connesso input comandi: {socket_comandi_input_conn.getpeername()}")
-
-                if not socket_comandi_output_conn:
-                    socket_comandi_output.settimeout(0.5)
-                    socket_comandi_output_conn, _ = socket_comandi_output.accept()
-                    print(f"Connesso output comandi: {socket_comandi_output_conn.getpeername()}")
-
-                if socket_comandi_input_conn and socket_comandi_output_conn:
-                    # Sostituisci i socket originali con le connessioni accettate
-                    socket_comandi_input = socket_comandi_input_conn
-                    socket_comandi_output = socket_comandi_output_conn
-                    break
-            except socket.timeout:
-                # Timeout normale, continua
-                continue
-            except Exception as e:
-                print(f"Errore durante l'accettazione delle connessioni TCP: {e} - Linea {get_line_number()}")
-                time.sleep(0.1)
-
         # Inizializza PyAudio
-        # Inizializzazione audio sicura
-        try:
-            # Inizializza PyAudio con impostazioni standard
-            p = pyaudio.PyAudio()
-            print("Moudlo p audio inizializzato con impostazioni standard")
+        p = pyaudio.PyAudio()
+        audioStream = p.open(
+            format=FORMAT,
+            rate=RATE,
+            channels=CHANNEL,
+            input=True,
+            output=True,
+            frames_per_buffer=CHUNK
+        )
 
-        except Exception as e:
-            print(f"Errore nell'inizializzazione audio: {e} - Linea {get_line_number()}")
-            # Tentativo di fallback con impostazioni minime
+        print("Stream audio inizializzato correttamente")
 
-        if p:
-            try:
-                InputStream = p.open(
-                    format=FORMAT,
-                    rate=RATE,
-                    channels=CHANNEL,
-                    input=True,
-                    frames_per_buffer=CHUNK,
-                    start=True
-                )
-                print("Stream audio inizializzato con impostazioni base")
-            except Exception as e2:
-                print(f"Errore critico nell'inizializzazione audio: {e2} - Linea {get_line_number()}")
-
-            print("InputStream audio inizializzato correttamente")
-
-            try:
-                OutputStream = p.open(
-                    format=FORMAT,
-                    rate=RATE,
-                    channels=CHANNEL,
-                    output=True,
-                    frames_per_buffer=CHUNK,
-                    start=True
-                )
-                print("Stream audio inizializzato con impostazioni base")
-            except Exception as e2:
-                print(f"Errore critico nell'inizializzazione audio: {e2} - Linea {get_line_number()}")
-
-            print("OutputStream audio inizializzato correttamente")
-
-        # Avvia thread invio audio
-        audio_invio_thread = threading.Thread(target=gestisci_invio_audio)
-        audio_invio_thread.daemon = True
-        audio_invio_thread.start()
-
-        # Avvia thread ricezione audio
-        audio_ricezione_thread = threading.Thread(target=gestisci_ricezione_audio)
-        audio_ricezione_thread.daemon = True
-        audio_ricezione_thread.start()
-
-        # Avvia thread gestione comandi input
-        comandi_input_thread = threading.Thread(target=gestisci_comandi_input_chiamata)
-        comandi_input_thread.daemon = True
-        comandi_input_thread.start()
+        # Avvia thread audio
+        audio_thread = threading.Thread(target=gestisci_audio)
+        audio_thread.daemon = True
+        audio_thread.start()
 
         # Se è una videochiamata, inizializza anche il video
         if is_videochiamata:
@@ -516,20 +309,14 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
                 print("Errore: impossibile aprire la webcam")
             else:
                 print("Webcam inizializzata con successo")
-
-                # Avvia i thread con priorità
-                video_invio_thread = threading.Thread(target=gestisci_invio_video)
-                video_invio_thread.daemon = True
-                video_invio_thread.start()
-
-                video_ricezione_thread = threading.Thread(target=gestisci_ricezione_video)
-                video_ricezione_thread.daemon = True
-                video_ricezione_thread.start()
+                video_thread = threading.Thread(target=gestisci_video)
+                video_thread.daemon = True
+                video_thread.start()
 
         # Utilizziamo un brevissimo timeout per dare tempo ai thread di avviarsi
         time.sleep(0.1)
 
-        # Mostra la finestra di chiamata
+        # Mostra la finestra di chiamata - aggiungiamo un flag per tracciare il successo
         try:
             # Assicurati che non ci siano finestre di chiamata esistenti
             if dpg.does_item_exist("finestra_chiamata"):
@@ -539,23 +326,23 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
             mostra_finestra_chiamata("ACCEPTED")
             print("Finestra di chiamata mostrata con successo")
         except Exception as e:
-            print(f"Errore nel mostrare la finestra di chiamata: {e} - Linea {get_line_number()}")
+            print(f"Errore nel mostrare la finestra di chiamata: {e}")
             # Tentiamo di nuovo dopo un breve ritardo
             time.sleep(0.5)
             try:
                 mostra_finestra_chiamata("ACCEPTED")
                 print("Secondo tentativo di mostrare la finestra riuscito")
             except Exception as e2:
-                print(f"Fallito anche il secondo tentativo: {e2} - Linea {get_line_number()}")
+                print(f"Fallito anche il secondo tentativo: {e2}")
 
     except Exception as e:
-        print(f"Errore nell'accettazione della chiamata: {e} - Linea {get_line_number()}")
+        print(f"Errore nell'accettazione della chiamata: {e}")
         if socket_chiamata:
             socket_chiamata.close()
             socket_chiamata = None
 
         # In caso di errore, termina immediatamente la chiamata
-        termina_chiamata(True)
+        termina_chiamata()
 
 
 def rifiuta_chiamata(chiChiama, client):
@@ -573,7 +360,7 @@ def rifiuta_chiamata(chiChiama, client):
         if dpg.does_item_exist("finestra_richiesta_chiamata"):
             dpg.delete_item("finestra_richiesta_chiamata")
     except Exception as e:
-        print(f"Errore nel rifiuto della chiamata: {e} - Linea {get_line_number()}")
+        print(f"Errore nel rifiuto della chiamata: {e}")
 
 
 def notifica_chiamata(chiChiama, client):
@@ -608,8 +395,8 @@ def notifica_chiamata(chiChiama, client):
 
             # Aggiunge il messaggio della chiamata
             dpg.add_spacer(height=10)
-            dpg.add_text(f"{chiChiama} ti sta chiamando", color=[0, 0, 0])
-            dpg.add_text(f"Tipo: {call_type}", color=[50, 50, 50])
+            dpg.add_text(f"{chiChiama} ti sta chiamando", color=[255, 255, 255])
+            dpg.add_text(f"Tipo: {call_type}", color=[200, 200, 200])
             dpg.add_separator()
             dpg.add_spacer(height=15)
 
@@ -644,7 +431,7 @@ def notifica_chiamata(chiChiama, client):
         print(f"Finestra di notifica chiamata creata per {chiChiama}, tipo={call_type}")
 
     except Exception as e:
-        print(f"Errore nella creazione della finestra di notifica chiamata: {e} - Linea {get_line_number()}")
+        print(f"Errore nella creazione della finestra di notifica chiamata: {e}")
 
 
 def listen_for_call_request(socket_attesa_chiamate):
@@ -652,76 +439,66 @@ def listen_for_call_request(socket_attesa_chiamate):
     Thread che ascolta le richieste di chiamata in arrivo.
     Gestisce le connessioni e notifica l'utente quando arriva una chiamata.
     """
-    global termina_thread_listen_for_calls, chiamata_in_corso, is_video
-
     print(f"Avvio thread ascolto chiamate su porta {PORT_CHIAMATE}")
 
-    # Per sicurezza, imposta il socket come non bloccante
-    socket_attesa_chiamate.settimeout(1.0)
-
-    try:
-        while not termina_thread_listen_for_calls:
-            # Se c'è già una chiamata in corso, metti in pausa
-            if chiamata_in_corso:
+    while True:
+        try:
+            # Se c'è già una chiamata in corso, metti in pausa questo thread
+            if 'chiamata_in_corso' in globals() and chiamata_in_corso:
                 time.sleep(0.5)
                 continue
 
+            # Accetta le connessioni in arrivo con timeout
             try:
-                # Accetta connessioni con timeout breve
                 client, address = socket_attesa_chiamate.accept()
                 print(f"Nuova richiesta di connessione da {address}")
 
-                # Ricevi il messaggio di richiesta chiamata
-                try:
-                    client.settimeout(2.0)
-                    request = client.recv(BUFFER_SIZE).decode('utf-8')
-                    print(f"Richiesta ricevuta: {request}")
+                # Imposta un timeout per la ricezione
+                client.settimeout(5.0)
 
-                    # Analizza la richiesta
-                    if request.startswith("CALLREQUEST:"):
-                        parts = request.split(":")
-                        if len(parts) >= 3:
-                            caller_name = parts[1]
-                            is_video = parts[2].lower() == "true"
-
-                            # Mostra notifica della chiamata
-                            print(f"Richiesta di {'video' if is_video else ''}chiamata da {caller_name}")
-
-                            # Usa thread per non bloccare l'UI
-                            threading.Thread(
-                                target=notifica_chiamata,
-                                args=(caller_name, client),
-                                daemon=True
-                            ).start()
-                        else:
-                            print("Formato richiesta non valido")
-                            client.close()
-                    else:
-                        print(f"Richiesta non riconosciuta: {request}")
-                        client.close()
-                except socket.timeout:
-                    print("Timeout nella ricezione della richiesta - Linea {get_line_number()}")
+                # Ricevi i dati di richiesta chiamata
+                data = client.recv(BUFFER_SIZE).decode('utf-8')
+                if not data:
+                    print("Connessione stabilita ma nessun dato ricevuto, chiudo")
                     client.close()
-                except Exception as e:
-                    print(f"Errore nella gestione della richiesta: {e} - Linea {get_line_number()}")
+                    continue
+
+                # Log dettagliato per il debug
+                print(f"Dati ricevuti nella richiesta di chiamata: {data}")
+
+                # Elabora i dati ricevuti
+                request_keys = data.split(':')
+
+                # Controlla che ci siano abbastanza elementi dopo lo split
+                if len(request_keys) >= 3 and request_keys[0] == "CALLREQUEST":
+                    mittente = request_keys[1]
+                    is_video_str = request_keys[2]
+
+                    # Assegna il flag video
+                    global is_video, utente_in_chiamata
+                    is_video = (is_video_str.lower() == "true")
+                    utente_in_chiamata = mittente
+
+                    print(f"Ricevuta richiesta di chiamata da {mittente}, video={is_video}")
+
+                    # Mostra notifica di chiamata in arrivo
+                    notifica_chiamata(mittente, client)
+
+                elif len(request_keys) >= 1 and request_keys[0] == "ENDCALL":
+                    # Gestisce la richiesta di terminazione della chiamata
+                    print("Ricevuta richiesta di terminazione chiamata")
+                    termina_chiamata()
+                else:
+                    print(f"Formato dati non riconosciuto: {data}")
                     client.close()
 
             except socket.timeout:
-                # Timeout normale, continua
+                # Timeout scaduto nella accept() - normale in un socket non bloccante
                 continue
-            except Exception as e:
-                print(f"Errore accept socket: {e} - Linea {get_line_number()}")
-                time.sleep(0.5)
-                continue
-    except Exception as e:
-        print(f"Errore thread ascolto chiamate: {e} - Linea {get_line_number()}")
-    finally:
-        # Chiudi il socket in modo sicuro alla fine
-        try:
-            socket_attesa_chiamate.close()
-        except:
-            pass
-        print("Thread ascolto chiamate terminato")
+
+        except Exception as e:
+            print(f"Errore nel thread di ascolto chiamate: {e}")
+            time.sleep(1)  # Breve pausa per evitare loop veloce in caso di errori
 
 
 def notifica_messaggio_privato(daChi):
@@ -745,7 +522,7 @@ def notifica_messaggio_privato(daChi):
                         pos=[viewport_width - window_width - margin,
                              viewport_height - window_height - margin]):
             dpg.add_spacer(height=5)
-            dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[0, 0, 0])
+            dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[255, 255, 255])
             dpg.add_spacer(height=10)
             with dpg.group(horizontal=True):
                 dpg.add_button(label="Apri", tag="btn_notifica_privata", width=125,
@@ -779,7 +556,7 @@ def notifica_messaggio():
                             pos=[viewport_width - window_width - margin,
                                  viewport_height - window_height - margin]):
                 dpg.add_spacer(height=5)
-                dpg.add_text("Hai ricevuto un messaggio globale", color=[0, 0, 0])
+                dpg.add_text("Hai ricevuto un messaggio globale", color=[255, 255, 255])
                 dpg.add_spacer(height=10)
                 with dpg.group(horizontal=True):
                     dpg.add_button(label="Apri", tag="btn_notifica_globale", width=110, callback=apri_globale)
@@ -821,11 +598,11 @@ def listen_to_server():
                         print(f"Lista utenti aggiornata: {utenti_disponibili}")
                         continue  # Salta il resto del processing
                 except Exception as e:
-                    print(f"Errore nel parsing JSON: {e} - Linea {get_line_number()}")
+                    print(f"Errore nel parsing JSON: {e}")
                     # Se non è un JSON valido, procedi come messaggio normale
 
             # Gestione messaggi privati
-            elif msg.startswith("PRIVATE:"):
+            if msg.startswith("PRIVATE:"):
                 if "sending_file:" in msg:
                     try:
                         # Formato: PRIVATE:sending_file:mittente:timestamp:nome_file
@@ -861,7 +638,7 @@ def listen_to_server():
                         # Non processare oltre questo messaggio
                         continue
                     except Exception as e:
-                        print(f"Errore nell'elaborazione della notifica di file privato: {e} - Linea {get_line_number()}")
+                        print(f"Errore nell'elaborazione della notifica di file privato: {e}")
 
                 else:
                     _, private_msg = msg.split(":", 1)
@@ -894,7 +671,7 @@ def listen_to_server():
                     # Non mostrare il messaggio privato nella chat globale
                     continue
 
-            elif msg.startswith("IP:CALL:"):
+            if msg.startswith("IP:CALL:"):
                 keys = msg.split(':')
                 # risposta != "Nessun client con quel nome disponibile"
                 ip_utente_da_chiamare = keys[2]
@@ -904,18 +681,18 @@ def listen_to_server():
                 thread_chiama = threading.Thread(target=call, args=(ip_utente_da_chiamare,))
                 thread_chiama.start()
 
-            elif msg.startswith("IP:VIDEOCALL:"):
+            if msg.startswith("IP:VIDEOCALL:"):
                 keys = msg.split(':')
                 # risposta != "Nessun client con quel nome disponibile"
                 ip_utente_da_chiamare = keys[2]
                 print(ip_utente_da_chiamare)
                 dpg.configure_item("btn_videochiama_privato", enabled=False)
                 dpg.configure_item("btn_chiama_privato", enabled=False)
-                thread_videochiama = threading.Thread(target=videocall, args=(ip_utente_da_chiamare,))
-                thread_videochiama.start()
+                thread_chiama = threading.Thread(target=videocall, args=(ip_utente_da_chiamare,))
+                thread_chiama.start()
 
             # Gestione file in arrivo
-            elif msg == "sending_file":
+            if msg == "sending_file":
                 print("Rilevata notifica di invio file")
 
                 # Ricevi timestamp e nome utente
@@ -942,88 +719,49 @@ def listen_to_server():
                     notifica_messaggio()
 
         except Exception as e:
-            print(f"Error in listen_to_server: {e} - Linea {get_line_number()}")
+            print(f"Error in listen_to_server: {e}")
             break
 
     print("Thread di ascolto terminato")
 
 
-def call(ip):  # vedi se ha pushato
+def call(ip):
     """
     Inizia una chiamata audio con l'utente all'IP specificato.
-    Versione UDP per audio con gestione errori avanzata.
+    Gestisce correttamente gli errori e mantiene lo stato dell'interfaccia.
     """
-    global chiamata_in_corso, socket_chiamata, is_video, InputStream, OutputStream, VideoCapture, p, utente_in_chiamata
-    global socket_chiamata_invio_audio, socket_chiamata_ricezione_audio, socket_comandi_input, socket_comandi_output
-    global ip_chiamata_destinatario
-
-    # Salva l'IP del destinatario per eventuali riconnessioni
-    ip_chiamata_destinatario = ip
-
-    # Inizializza tutte le variabili dei socket a None all'inizio della funzione
-    socket_comandi_output = None
-    socket_comandi_input = None
-    socket_chiamata_invio_audio = None
-    socket_chiamata_ricezione_audio = None
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
 
     # Disabilita immediatamente i pulsanti per evitare chiamate multiple
     dpg.configure_item("btn_videochiama_privato", enabled=False)
     dpg.configure_item("btn_chiama_privato", enabled=False)
 
-    # Prima di iniziare, verifica che non ci sia già una chiamata in corso
-    if chiamata_in_corso:
-        print("C'è già una chiamata in corso, impossibile avviarne un'altra")
-        mostra_finestra_chiamata("ERROR")
-        dpg.configure_item("btn_videochiama_privato", enabled=True)
-        dpg.configure_item("btn_chiama_privato", enabled=True)
-        return
-
     try:
         is_video = False  # Chiamata normale (solo audio)
         utente_in_chiamata = username_client_chat_corrente
 
-        # Verifica preliminare della connettività
-        if not verifica_connettivita(ip, PORT_CHIAMATE, timeout=2):
-            print(f"L'utente {utente_in_chiamata} non è raggiungibile sulla porta {PORT_CHIAMATE}")
-            mostra_finestra_chiamata("UNREACHABLE")
-            dpg.configure_item("btn_videochiama_privato", enabled=True)
-            dpg.configure_item("btn_chiama_privato", enabled=True)
-            return
-
         print(f"Chiamata in corso verso IP: {ip}, porta: {PORT_CHIAMATE}")
-
-        # Inizializza il socket principale (TCP per il controllo della chiamata)
         socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket_chiamata.settimeout(10)  # Timeout aumentato a 10 secondi
-        socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)  # Buffer di ricezione più grande
-        socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)  # Buffer di invio più grande
-        socket_chiamata.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # Disattiva Nagle's algorithm
+        socket_chiamata.settimeout(5)  # Timeout più breve di 5 secondi
 
         # Tenta la connessione
         try:
             socket_chiamata.connect((ip, PORT_CHIAMATE))
             print(f"Connessione stabilita con {ip}:{PORT_CHIAMATE}")
         except ConnectionRefusedError:
-            print(f"Connessione rifiutata da {ip}:{PORT_CHIAMATE} - Linea {get_line_number()}")
+            print(f"Connessione rifiutata da {ip}:{PORT_CHIAMATE}")
             mostra_finestra_chiamata("UNREACHABLE")
-            # Riabilita i pulsanti
-            dpg.configure_item("btn_videochiama_privato", enabled=True)
-            dpg.configure_item("btn_chiama_privato", enabled=True)
+            termina_chiamata()
             return
         except socket.timeout:
-            print(f"Timeout nella connessione a {ip}:{PORT_CHIAMATE} - Linea {get_line_number()}")
+            print(f"Timeout nella connessione a {ip}:{PORT_CHIAMATE}")
             mostra_finestra_chiamata("TIMEOUT")
-            # Riabilita i pulsanti
-            dpg.configure_item("btn_videochiama_privato", enabled=True)
-            dpg.configure_item("btn_chiama_privato", enabled=True)
+            termina_chiamata()
             return
         except Exception as e:
-            print(f"Errore di connessione: {e} - Linea {get_line_number()}")
+            print(f"Errore di connessione: {e}")
             mostra_finestra_chiamata("ERROR")
-            # Riabilita i pulsanti
-            dpg.configure_item("btn_videochiama_privato", enabled=True)
-            dpg.configure_item("btn_chiama_privato", enabled=True)
+            termina_chiamata()
             return
 
         # Invia richiesta di chiamata - IMPORTANTE: Nome mittente
@@ -1031,282 +769,56 @@ def call(ip):  # vedi se ha pushato
         print(f"Invio richiesta: {request}")
         socket_chiamata.send(request.encode('utf-8'))
 
-        # Attendi risposta con timeout aumentato
+        # Attendi risposta
         try:
-            socket_chiamata.settimeout(10)  # Timeout di 10 secondi
             response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
             print(f"Risposta ricevuta: {response}")
-
-            # Se la risposta è vuota, trattala come un timeout
-            if not response:
-                print("Risposta vuota ricevuta - probabile disconnessione")
-                socket_chiamata.close()
-                socket_chiamata = None
-                mostra_finestra_chiamata("TIMEOUT")
-                # Riabilita i pulsanti
-                dpg.configure_item("btn_videochiama_privato", enabled=True)
-                dpg.configure_item("btn_chiama_privato", enabled=True)
-                return
-
         except socket.timeout:
-            print("Timeout in attesa di risposta alla richiesta di chiamata - Linea {get_line_number()}")
-            # Chiudi il socket e mostra errore
-            if socket_chiamata:
-                socket_chiamata.close()
-                socket_chiamata = None
+            print("Timeout in attesa di risposta alla richiesta di chiamata")
             mostra_finestra_chiamata("TIMEOUT")
-            # Riabilita i pulsanti
-            dpg.configure_item("btn_videochiama_privato", enabled=True)
-            dpg.configure_item("btn_chiama_privato", enabled=True)
+            termina_chiamata()
             return
         except Exception as e:
-            print(f"Errore nella ricezione della risposta: {e} - Linea {get_line_number()}")
-            # Chiudi il socket e mostra errore
-            if socket_chiamata:
-                socket_chiamata.close()
-                socket_chiamata = None
+            print(f"Errore nella ricezione della risposta: {e}")
             mostra_finestra_chiamata("ERROR")
-            # Riabilita i pulsanti
-            dpg.configure_item("btn_videochiama_privato", enabled=True)
-            dpg.configure_item("btn_chiama_privato", enabled=True)
+            termina_chiamata()
             return
 
-        # Procedi solo se la risposta è positiva
         if response == "CALLREQUEST:ACCEPT":
-            # Inizializza PyAudio PRIMA di creare i socket di connessione
-            # Inizializzazione audio sicura
-            try:
-                # Inizializza PyAudio con impostazioni standard
-                p = pyaudio.PyAudio()
-                print("Moudlo p audio inizializzato con impostazioni standard")
-
-            except Exception as e:
-                print(f"Errore nell'inizializzazione audio: {e} - Linea {get_line_number()}")
-                # Tentativo di fallback con impostazioni minime
-
-            if p:
-                try:
-                    InputStream = p.open(
-                        format=FORMAT,
-                        rate=RATE,
-                        channels=CHANNEL,
-                        input=True,
-                        frames_per_buffer=CHUNK,
-                        start=True
-                    )
-                    print("Stream audio inizializzato con impostazioni base")
-                except Exception as e2:
-                    print(f"Errore critico nell'inizializzazione audio: {e2} - Linea {get_line_number()}")
-
-                print("InputStream audio inizializzato correttamente")
-
-                try:
-                    OutputStream = p.open(
-                        format=FORMAT,
-                        rate=RATE,
-                        channels=CHANNEL,
-                        output=True,
-                        frames_per_buffer=CHUNK,
-                        start=True
-                    )
-                    print("Stream audio inizializzato con impostazioni base")
-                except Exception as e2:
-                    print(f"Errore critico nell'inizializzazione audio: {e2} - Linea {get_line_number()}")
-
-
-                print("OutputStream audio inizializzato correttamente")
-
-            if not socket_chiamata:
-                socket_chiamata.close()
-                socket_chiamata = None
-                mostra_finestra_chiamata("ERROR")
-                dpg.configure_item("btn_videochiama_privato", enabled=True)
-                dpg.configure_item("btn_chiama_privato", enabled=True)
-                return
-
-            # Aspetta un possibile messaggio di sincronizzazione
-
-
-            # Breve pausa prima di inizializzare i socket UDP
-            time.sleep(0.5)
-
-            # Inizializza i socket per l'audio (UDP)
-            socket_chiamata_invio_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-
-            socket_chiamata_ricezione_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
-            socket_chiamata_ricezione_audio.settimeout(0.1)
-            socket_chiamata_ricezione_audio.bind(("0.0.0.0", PORT_RICEZIONE_AUDIO))
-
-            # Inizializza i socket di controllo (TCP)
-            socket_comandi_input = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            socket_comandi_input.settimeout(5)
-            socket_comandi_input.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            socket_comandi_input.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
-            socket_comandi_input.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-            socket_comandi_input.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
-            socket_comandi_output = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            socket_comandi_output.settimeout(5)
-            socket_comandi_output.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            socket_comandi_output.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
-            socket_comandi_output.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-            socket_comandi_output.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
-            # Connessione solo ai socket TCP di controllo
-            max_retry = 3
-            connection_success = False
-
-            for retry in range(max_retry):
-                try:
-                    # Aggiungi piccole pause tra i tentativi di connessione
-                    time.sleep(0.3)
-                    socket_comandi_input.bind(("0.0.0.0", PORT_RICEZIONE_COMANDI))
-                    print(f"Connessione comandi input stabilita con {ip}:{PORT_RICEZIONE_COMANDI}")
-
-                    time.sleep(0.3)
-                    socket_comandi_output.connect((ip, PORT_RICEZIONE_COMANDI))
-                    print(f"Connessione comandi output stabilita con {ip}:{PORT_RICEZIONE_COMANDI}")
-
-                    # Se tutte le connessioni sono riuscite, imposta il flag
-                    connection_success = True
-                    break
-
-                except Exception as e:
-                    print(f"Errore nella connessione dei socket di controllo (tentativo {retry + 1}/{max_retry}): {e} - Linea {get_line_number()}")
-                    # Se non è l'ultimo tentativo, attendiamo e riproviamo
-                    if retry < max_retry - 1:
-                        time.sleep(1.0)  # Attesa più lunga tra i tentativi
-                    else:
-                        mostra_finestra_chiamata("ERROR")
-                        termina_chiamata(True)
-                        return
-
-            # Verifica se tutte le connessioni TCP sono state stabilite
-            if not connection_success:
-                print("Impossibile stabilire le connessioni TCP necessarie")
-                mostra_finestra_chiamata("ERROR")
-                termina_chiamata(True)
-                return
-
-            # Imposta lo stato della chiamata
             chiamata_in_corso = True
 
-            print("Connessioni stabilite, avvio thread audio...")
+            # Inizializza PyAudio
+            p = pyaudio.PyAudio()
+            audioStream = p.open(
+                format=FORMAT,
+                rate=RATE,
+                channels=CHANNEL,
+                input=True,
+                output=True,
+                frames_per_buffer=CHUNK
+            )
 
-            # Avvia thread invio audio
-            audio_invio_thread = threading.Thread(target=gestisci_invio_audio)
-            audio_invio_thread.daemon = True
-            audio_invio_thread.start()
-
-            # Avvia thread ricezione audio
-            audio_ricezione_thread = threading.Thread(target=gestisci_ricezione_audio)
-            audio_ricezione_thread.daemon = True
-            audio_ricezione_thread.start()
-
-            # Avvia thread gestione comandi input
-            comandi_input_thread = threading.Thread(target=gestisci_comandi_input_chiamata)
-            comandi_input_thread.daemon = True
-            comandi_input_thread.start()
-
-            # Attesa più lunga per dare tempo ai thread di avviarsi
-            time.sleep(0.5)
+            # Avvia thread audio
+            audio_thread = threading.Thread(target=gestisci_audio)
+            audio_thread.daemon = True
+            audio_thread.start()
 
             # Mostra finestra di chiamata
             mostra_finestra_chiamata("ACCEPTED")
-
         else:
             print(f"Chiamata rifiutata: {response}")
             mostra_finestra_chiamata("REFUSED")
-            termina_chiamata(True)
+            termina_chiamata()
 
     except Exception as e:
-        print(f"Errore generale durante la chiamata: {e} - Linea {get_line_number()}")
+        print(f"Errore generale durante la chiamata: {e}")
         mostra_finestra_chiamata("ERROR")
-        termina_chiamata(True)
+        termina_chiamata()
+    finally:
+        # Riabilita i pulsanti di chiamata in ogni caso
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+        dpg.configure_item("btn_chiama_privato", enabled=True)
 
-def verifica_connettivita(ip, porta, timeout=2):
-    """
-    Verifica se è possibile stabilire una connessione TCP all'indirizzo e porta specificati.
-    Restituisce True se la connessione è possibile, False altrimenti.
-    """
-    try:
-        # Crea un socket temporaneo
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-
-        # Tenta la connessione
-        result = sock.connect_ex((ip, porta))
-
-        # Chiudi subito il socket
-        sock.close()
-
-        # Se result è 0, la connessione è riuscita
-        return result == 0
-
-    except Exception as e:
-        print(f"Errore nel test di connettività: {e} - Linea {get_line_number()}")
-        return False
-
-def gestisci_comandi_input_chiamata():
-    """
-    Gestisce i comandi in ingresso durante una chiamata in modo robusto.
-    Utilizza un meccanismo di timeout avanzato per evitare blocchi.
-    """
-    global socket_comandi_input, chiamata_in_corso
-
-    print("Avvio thread gestione comandi input")
-
-    # Loop principale con controllo attivo della chiamata
-    while chiamata_in_corso and socket_comandi_input:
-        try:
-            # Verifica che il socket sia ancora valido
-            if not socket_comandi_input:
-                print("socket non valido input comandi")
-                break
-
-            # Imposta timeout breve per evitare blocchi
-            socket_comandi_input.settimeout(0.5)
-
-            try:
-                # Prova a ricevere un comando
-                comando = socket_comandi_input.recv(BUFFER_SIZE).decode('utf-8')
-
-                # Gestisci il comando se presente
-                if comando:
-                    print(f"Comando ricevuto: {comando}")
-                    if comando == b"TERMINA":
-                        print("Comando di terminazione ricevuto")
-                        termina_chiamata()
-                        break
-                    else:
-                        continue
-            except socket.timeout:
-                # Timeout normale, verifichiamo se la chiamata è ancora attiva
-                if not chiamata_in_corso:
-                    break
-                continue
-            except ConnectionResetError:
-                print("Connessione reset dal peer")
-                termina_chiamata()
-                break
-            except Exception as e:
-                print(f"Errore ricezione comando: {e} - Linea {get_line_number()}")
-                # Non terminiamo immediatamente per errori temporanei
-                time.sleep(0.1)
-                continue
-
-        except Exception as e:
-            print(f"Errore gestione comandi input: {e} - Linea {get_line_number()}")
-            if not chiamata_in_corso:
-                break
-            time.sleep(0.1)
-
-        # Breve pausa per ridurre l'utilizzo della CPU
-        time.sleep(0.01)
-
-    print("Thread gestione comandi input terminato")
 
 def debug_richiesta_ip(destinatario, is_video):
     """
@@ -1325,416 +837,111 @@ def debug_richiesta_ip(destinatario, is_video):
     # Ritorna il comando per uso immediato
     return comando
 
-
-def get_low_latency_settings():
-    """
-    Crea impostazioni a bassa latenza specifiche per l'host API.
-    Versione robusta che funziona anche senza attributi specifici.
-    """
-    try:
-        # Su Windows, non abbiamo bisogno di impostazioni speciali
-        if os.name == 'nt':
-            return None
-
-        # Su macOS, prima verifichiamo se PaMacCoreStreamInfo esiste
-        elif sys.platform == 'darwin':
-            if not hasattr(pyaudio, 'PaMacCoreStreamInfo'):
-                print("Attributo PaMacCoreStreamInfo non disponibile in questa versione di PyAudio")
-                return None
-
-            # Ora verifichiamo se ha il flag kAudioLowLatencyMode
-            PaMacCoreStreamInfo = pyaudio.PaMacCoreStreamInfo
-            if not hasattr(PaMacCoreStreamInfo, 'kAudioLowLatencyMode'):
-                print("Flag kAudioLowLatencyMode non disponibile in questa versione di PyAudio")
-                return None
-
-            # Se arriviamo qui, possiamo creare l'oggetto con le impostazioni
-            return PaMacCoreStreamInfo(flags=PaMacCoreStreamInfo.kAudioLowLatencyMode)
-
-        # Linux o altro sistema
-        else:
-            return None
-
-    except Exception as e:
-        print(f"Avviso: Impossibile creare impostazioni a bassa latenza: {e} - Linea {get_line_number()}")
-        return None
-
-
-def get_low_latency_settings():
-    """
-    Crea impostazioni a bassa latenza specifiche per l'host API
-    """
-    try:
-        # Su Windows, utilizziamo le impostazioni WASAPI per la bassa latenza
-        if os.name == 'nt':
-            if not hasattr(pyaudio.PaMacCoreStreamInfo, 'kAudioLowLatencyMode'):
-                # Creazione di strutture dati per le API WASAPI
-                # (questo è uno stub, pyaudio non fornisce direttamente queste API)
-                return None
-
-        # Su macOS, utilizziamo Core Audio per la bassa latenza
-        elif sys.platform == 'darwin':
-            # Richiede pyaudio compilato con supporto Core Audio
-            if hasattr(pyaudio, 'paMacCoreStreamInfo'):
-                stream_info = pyaudio.PaMacCoreStreamInfo(
-                    flags=pyaudio.PaMacCoreStreamInfo.kAudioLowLatencyMode
-                )
-                return stream_info
-
-        # Su Linux, utilizziamo ALSA o PulseAudio
-        else:
-            # Impostazioni specifiche per ALSA/PulseAudio
-            # (questo è uno stub perché pyaudio non fornisce un'API specifica)
-            return None
-    except Exception as e:
-        print(f"Avviso: Impossibile creare impostazioni a bassa latenza: {e} - Linea {get_line_number()}")
-
-    return None
-
-
-def detect_mobile_hotspot(ip):
-    """
-    Tenta di rilevare se la connessione è su un hotspot mobile
-    basandosi sul ping e sul pattern dell'indirizzo IP
-    """
-    try:
-        # Fai un test di ping per verificare latenza e jitter
-        ping_count = 3
-        if os.name == 'nt':  # Windows
-            ping_cmd = f"ping -n {ping_count} {ip}"
-        else:  # Linux/Mac
-            ping_cmd = f"ping -c {ping_count} {ip}"
-
-        ping_result = subprocess.run(ping_cmd, shell=True, capture_output=True, text=True)
-
-        if ping_result.returncode == 0:
-            output = ping_result.stdout
-
-            # Estrai i tempi di ping
-            ping_times = []
-            if os.name == 'nt':  # Windows
-                pattern = r'tempo=(\d+)ms'
-            else:  # Linux/Mac
-                pattern = r'time=(\d+\.\d+) ms'
-
-            matches = re.findall(pattern, output)
-            for match in matches:
-                ping_times.append(float(match))
-
-            # Calcola il ping medio e jitter
-            if ping_times:
-                avg_ping = sum(ping_times) / len(ping_times)
-
-                # Calcola il jitter (variazione del ping)
-                if len(ping_times) > 1:
-                    jitter = sum(abs(ping_times[i] - ping_times[i - 1]) for i in range(1, len(ping_times))) / (
-                                len(ping_times) - 1)
-                else:
-                    jitter = 0
-
-                print(f"Test connessione: ping={avg_ping:.1f}ms, jitter={jitter:.1f}ms")
-
-                # Indicatori di hotspot mobile:
-                # 1. Ping elevato (>50ms) per connessioni locali
-                # 2. Jitter elevato (>10ms)
-                if avg_ping > 50 or jitter > 10:
-                    print("Rilevamento automatico: probabile hotspot mobile")
-                    return True
-
-        # Verifica range IP tipici degli hotspot
-        hotspot_patterns = [
-            r'^192\.168\.43\.',  # Tipico di hotspot Android
-            r'^172\.20\.10\.',  # Tipico di hotspot iOS
-            r'^10\.0\.0\.'  # Alcuni hotspot
-        ]
-
-        for pattern in hotspot_patterns:
-            if re.match(pattern, ip):
-                print(f"Rilevato IP tipico di hotspot mobile: {ip}")
-                return True
-
-    except Exception as e:
-        print(f"Errore nel rilevamento hotspot: {e} - Linea {get_line_number()}")
-
-    return False
-
-
-def gestisci_comandi_chiamata():
-    """
-    Gestisce i comandi durante una chiamata.
-    Versione robusta che gestisce meglio i timeout.
-    """
-    global chiamata_in_corso, socket_comandi_input
-
-    print("Avvio thread gestione comandi")
-
-    try:
-        while chiamata_in_corso:
-            try:
-                # Verifica che il socket sia valido
-                if socket_comandi_input:
-                    socket_comandi_input.settimeout(0.5)  # Timeout più lungo
-                else:
-                    # Socket non valido, esci dal ciclo
-                    break
-
-                try:
-                    # Ricevi comandi
-                    comando = socket_comandi_input.recv(BUFFER_SIZE).decode('utf-8')
-
-                    # Gestisci comando se presente
-                    if comando:
-                        if comando == "TERMINA":
-                            print("Ricevuto comando di terminazione")
-                            termina_chiamata(True)
-                            break
-                except socket.timeout:
-                    # Timeout normale, continua
-                    continue
-                except Exception as e:
-                    # Ignora altri errori di rete
-                    print(f"Errore ricezione comando: {e} - Linea {get_line_number()}")
-                    if not chiamata_in_corso:
-                        break
-                    time.sleep(0.1)
-                    continue
-
-            except Exception as e:
-                print(f"Errore gestione comandi: {e} - Linea {get_line_number()}")
-                if not chiamata_in_corso:
-                    break
-                time.sleep(0.1)
-
-            # Pausa per ridurre utilizzo CPU
-            time.sleep(0.05)
-
-    except Exception as e:
-        print(f"Errore critico thread comandi: {e} - Linea {get_line_number()}")
-    finally:
-        print("Thread comandi terminato")
-
-
 def videocall(ip):
     """
     Inizia una videochiamata con l'utente all'IP specificato.
-    Versione UDP per audio e video.
     """
-    global chiamata_in_corso, socket_chiamata, is_video, InputStream, OutputStream, VideoCapture, p, utente_in_chiamata
-    global socket_chiamata_invio_audio, socket_chiamata_invio_video, socket_chiamata_ricezione_audio, socket_chiamata_ricezione_video
-    global socket_comandi_input, socket_comandi_output, ip_chiamata_destinatario
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
 
-    # Salva l'IP per eventuali riconnessioni
-    ip_chiamata_destinatario = ip
-    print("Sono igor")
-
-    # Disabilita i pulsanti
+    # Disabilita immediatamente i pulsanti per evitare chiamate multiple
     dpg.configure_item("btn_videochiama_privato", enabled=False)
     dpg.configure_item("btn_chiama_privato", enabled=False)
 
-    # Verifica se c'è già una chiamata
-    if chiamata_in_corso:
-        print("C'è già una chiamata in corso")
-        mostra_finestra_chiamata("ERROR")
-        dpg.configure_item("btn_videochiama_privato", enabled=True)
-        dpg.configure_item("btn_chiama_privato", enabled=True)
-        return
-
-
     try:
-        is_video = True
+        is_video = True  # Videochiamata (audio + video)
         utente_in_chiamata = username_client_chat_corrente
 
-        # Crea socket principale (TCP per controllo chiamata)
+        print(f"Videochiamata in corso verso IP: {ip}, porta: {PORT_CHIAMATE}")
         socket_chiamata = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket_chiamata.settimeout(5)
-        socket_chiamata.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        socket_chiamata.settimeout(5)  # Timeout più breve di 5 secondi
 
-        # Connettiti al socket principale
+        # Tenta la connessione
         try:
             socket_chiamata.connect((ip, PORT_CHIAMATE))
             print(f"Connessione stabilita con {ip}:{PORT_CHIAMATE}")
-        except Exception as e:
-            print(f"Impossibile connettersi all'utente: {e} - Linea {get_line_number()}")
+        except ConnectionRefusedError:
+            print(f"Connessione rifiutata da {ip}:{PORT_CHIAMATE}")
             mostra_finestra_chiamata("UNREACHABLE")
-            # Riabilita i pulsanti
-            dpg.configure_item("btn_videochiama_privato", enabled=True)
-            dpg.configure_item("btn_chiama_privato", enabled=True)
+            termina_chiamata()
+            return
+        except socket.timeout:
+            print(f"Timeout nella connessione a {ip}:{PORT_CHIAMATE}")
+            mostra_finestra_chiamata("TIMEOUT")
+            termina_chiamata()
+            return
+        except Exception as e:
+            print(f"Errore di connessione: {e}")
+            mostra_finestra_chiamata("ERROR")
+            termina_chiamata()
             return
 
-        # Invia richiesta
+        # Invia richiesta di chiamata - IMPORTANTE: Nome mittente
         request = f"CALLREQUEST:{nome_utente_personale}:{is_video}"
+        print(f"Invio richiesta: {request}")
         socket_chiamata.send(request.encode('utf-8'))
-        print(f"Richiesta inviata: {request}")
 
         # Attendi risposta
         try:
-            socket_chiamata.settimeout(10)
             response = socket_chiamata.recv(BUFFER_SIZE).decode('utf-8')
             print(f"Risposta ricevuta: {response}")
-
-            if not response:
-                print("Risposta vuota ricevuta")
-                socket_chiamata.close()
-                socket_chiamata = None
-                mostra_finestra_chiamata("TIMEOUT")
-                # Riabilita i pulsanti
-                dpg.configure_item("btn_videochiama_privato", enabled=True)
-                dpg.configure_item("btn_chiama_privato", enabled=True)
-                return
-
-        except Exception as e:
-            print(f"Timeout o errore nella risposta: {e} - Linea {get_line_number()}")
-            if socket_chiamata:
-                socket_chiamata.close()
-                socket_chiamata = None
+        except socket.timeout:
+            print("Timeout in attesa di risposta alla richiesta di videochiamata")
             mostra_finestra_chiamata("TIMEOUT")
-            # Riabilita i pulsanti
-            dpg.configure_item("btn_videochiama_privato", enabled=True)
-            dpg.configure_item("btn_chiama_privato", enabled=True)
+            termina_chiamata()
+            return
+        except Exception as e:
+            print(f"Errore nella ricezione della risposta: {e}")
+            mostra_finestra_chiamata("ERROR")
+            termina_chiamata()
             return
 
         if response == "CALLREQUEST:ACCEPT":
-            # Inizializza PyAudio
-            # Inizializzazione audio sicura
-            try:
-                # Inizializza PyAudio con impostazioni standard
-                p = pyaudio.PyAudio()
-                print("Moudlo p audio inizializzato con impostazioni standard")
-
-            except Exception as e:
-                print(f"Errore nell'inizializzazione audio: {e} - Linea {get_line_number()}")
-                # Tentativo di fallback con impostazioni minime
-
-            if p:
-                try:
-                    InputStream = p.open(
-                        format=FORMAT,
-                        rate=RATE,
-                        channels=CHANNEL,
-                        input=True,
-                        frames_per_buffer=CHUNK,
-                        start=True
-                    )
-                    print("Stream audio inizializzato con impostazioni base")
-                except Exception as e2:
-                    print(f"Errore critico nell'inizializzazione audio: {e2} - Linea {get_line_number()}")
-
-                print("InputStream audio inizializzato correttamente")
-
-                try:
-                    OutputStream = p.open(
-                        format=FORMAT,
-                        rate=RATE,
-                        channels=CHANNEL,
-                        output=True,
-                        frames_per_buffer=CHUNK,
-                        start=True
-                    )
-                    print("Stream audio inizializzato con impostazioni base")
-                except Exception as e2:
-                    print(f"Errore critico nell'inizializzazione audio: {e2} - Linea {get_line_number()}")
-
-                print("OutputStream audio inizializzato correttamente")
-
-                # Gestisci l'errore critico
-            if not socket_chiamata:
-                socket_chiamata.close()
-                socket_chiamata = None
-                mostra_finestra_chiamata("ERROR")
-                dpg.configure_item("btn_videochiama_privato", enabled=True)
-                dpg.configure_item("btn_chiama_privato", enabled=True)
-                return
-
-            # Crea socket UDP per audio
-            socket_chiamata_invio_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            socket_chiamata_invio_audio.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
-
-            socket_chiamata_ricezione_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            socket_chiamata_ricezione_audio.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
-            socket_chiamata_ricezione_audio.settimeout(0.1)
-            socket_chiamata_ricezione_audio.bind(("0.0.0.0", PORT_RICEZIONE_AUDIO))
-
-            # Crea socket UDP per video
-            socket_chiamata_invio_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            socket_chiamata_invio_video.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF,
-                                                   262144)  # Buffer più grande per video
-
-            socket_chiamata_ricezione_video = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            socket_chiamata_ricezione_video.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
-            socket_chiamata_ricezione_video.settimeout(0.1)
-            socket_chiamata_ricezione_video.bind(("0.0.0.0", PORT_RICEZIONE_VIDEO))
-
-            # Crea socket TCP per comandi
-            socket_comandi_input = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            socket_comandi_output = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-            # Imposta timeout e opzioni per i socket TCP
-            for s in [socket_comandi_input, socket_comandi_output]:
-                s.settimeout(5)
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-            # Connetti solo i socket TCP di controllo
-            try:
-                socket_comandi_input.connect((ip, PORT_RICEZIONE_COMANDI))
-                print(f"Connessione comandi input stabilita con {ip}:{PORT_RICEZIONE_COMANDI}")
-
-                socket_comandi_output.connect((ip, PORT_INVIO_COMANDI))
-                print(f"Connessione comandi output stabilita con {ip}:{PORT_INVIO_COMANDI}")
-            except Exception as e:
-                print(f"Errore nella connessione dei socket di controllo: {e} - Linea {get_line_number()}")
-                mostra_finestra_chiamata("ERROR")
-                termina_chiamata(True)
-                return
-
-            # Imposta stato chiamata
             chiamata_in_corso = True
 
-            # Inizializza video
-            try:
-                VideoCapture = cv2.VideoCapture(0)
-                VideoCapture.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-                VideoCapture.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+            # Inizializza PyAudio
+            p = pyaudio.PyAudio()
+            audioStream = p.open(
+                format=FORMAT,
+                rate=RATE,
+                channels=CHANNEL,
+                input=True,
+                output=True,
+                frames_per_buffer=CHUNK
+            )
 
-                if not VideoCapture.isOpened():
-                    print("Errore nell'apertura della webcam")
-                else:
-                    print("Webcam inizializzata con successo")
-            except Exception as e:
-                print(f"Errore nell'inizializzazione della webcam: {e} - Linea {get_line_number()}")
-                # Continuiamo comunque, potrebbe essere solo audio
+            # Inizializza VideoCapture
+            VideoCapture = cv2.VideoCapture(0)  # 0 è la webcam predefinita
 
-            # Avvia thread
-            if VideoCapture and VideoCapture.isOpened():
-                # Thread video
-                threading.Thread(target=gestisci_invio_video, daemon=True).start()
-                threading.Thread(target=gestisci_ricezione_video, daemon=True).start()
-                print("Thread video avviati")
+            # Verifica che la webcam sia stata aperta correttamente
+            if not VideoCapture.isOpened():
+                print("Errore: impossibile aprire la webcam")
+            else:
+                print("Webcam inizializzata con successo")
 
-            # Thread audio
-            threading.Thread(target=gestisci_invio_audio, daemon=True).start()
-            threading.Thread(target=gestisci_ricezione_audio, daemon=True).start()
-            print("Thread audio avviati")
+            # Avvia thread audio e video
+            audio_thread = threading.Thread(target=gestisci_audio)
+            audio_thread.daemon = True
+            audio_thread.start()
 
-            # Thread comandi
-            threading.Thread(target=gestisci_comandi_input_chiamata, daemon=True).start()
-            print("Thread comandi avviati")
+            video_thread = threading.Thread(target=gestisci_video)
+            video_thread.daemon = True
+            video_thread.start()
 
-            # Piccola pausa per stabilizzare
-            time.sleep(0.2)
-
-            # Mostra finestra chiamata
+            # Mostra finestra di chiamata
             mostra_finestra_chiamata("ACCEPTED")
-
         else:
-            print("Chiamata rifiutata")
+            print(f"Videochiamata rifiutata: {response}")
             mostra_finestra_chiamata("REFUSED")
-            termina_chiamata(True)
+            termina_chiamata()
 
     except Exception as e:
-        print(f"Errore nella videochiamata: {e} - Linea {get_line_number()}")
+        print(f"Errore generale durante la videochiamata: {e}")
         mostra_finestra_chiamata("ERROR")
-        termina_chiamata(True)
-
+        termina_chiamata()
+    finally:
+        # Riabilita i pulsanti di chiamata in ogni caso
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+        dpg.configure_item("btn_chiama_privato", enabled=True)
 
 def download_private_file(sender, filename, timestamp, notification_message):
     """Scarica un file inviato in una chat privata"""
@@ -1785,7 +992,7 @@ def download_private_file(sender, filename, timestamp, notification_message):
                     break
 
             except Exception as e:
-                print(f"Errore tentativo {attempt + 1}: {e} - Linea {get_line_number()}")
+                print(f"Errore tentativo {attempt + 1}: {e}")
                 time.sleep(2)
 
         # Aggiorna la chat in base al risultato
@@ -1803,13 +1010,13 @@ def download_private_file(sender, filename, timestamp, notification_message):
                 else:  # Linux e altri sistemi
                     subprocess.Popen(['xdg-open', os.path.dirname(file_path)])
             except Exception as e:
-                print(f"Errore nell'apertura del file explorer: {e} - Linea {get_line_number()}")
+                print(f"Errore nell'apertura del file explorer: {e}")
         else:
             error_msg = f"\n{timestamp} - {sender} --> Impossibile scaricare il file {filename} dopo {max_attempts} tentativi"
             update_private_chat(sender, notification_message, error_msg)
 
     except Exception as e:
-        print(f"Errore globale durante il download del file privato: {e} - Linea {get_line_number()}")
+        print(f"Errore globale durante il download del file privato: {e}")
         error_msg = f"\n{timestamp} - {sender} --> Errore durante il download di {filename}: {str(e)}"
         update_private_chat(sender, notification_message, error_msg)
 
@@ -1886,7 +1093,7 @@ def download_file(time_stamp_and_user_name, filename):
                 break
 
             except Exception as e:
-                print(f"Errore durante il tentativo {attempt + 1} di download: {e} - Linea {get_line_number()}")
+                print(f"Errore durante il tentativo {attempt + 1} di download: {e}")
                 time.sleep(2)  # Attesa tra i tentativi
 
         # Verifica se il file esiste e ha dimensione > 0
@@ -1913,7 +1120,7 @@ def download_file(time_stamp_and_user_name, filename):
                     dpg.set_value("chatlog_field", chatlog)
 
             except Exception as e:
-                print(f"Errore nell'apertura del file explorer: {e} - Linea {get_line_number()}")
+                print(f"Errore nell'apertura del file explorer: {e}")
         else:
             print(f"Download fallito: file {filename} non trovato o vuoto")
             # Aggiorna comunque il log della chat
@@ -1922,7 +1129,7 @@ def download_file(time_stamp_and_user_name, filename):
                 dpg.set_value("chatlog_field", chatlog)
 
     except Exception as e:
-        print(f"Errore durante il download del file: {e} - Linea {get_line_number()}")
+        print(f"Errore durante il download del file: {e}")
         # Aggiorna il log della chat anche in caso di errore
         with chatlog_lock:
             chatlog = chatlog + "\n" + time_stamp_and_user_name + f": Ha inviato un file ({filename}) - Errore nel download"
@@ -1998,7 +1205,7 @@ def invia():
             dpg.set_value("logerr", "")
 
         except Exception as e:
-            error_msg = f"Errore nell'invio del file: {e} - Linea {get_line_number()}"
+            error_msg = f"Errore nell'invio del file: {e}"
             print(error_msg)
             dpg.set_value("logerr", error_msg)
 
@@ -2020,7 +1227,7 @@ def invia():
             dpg.set_value("input_txt", "")
 
         except Exception as e:
-            error_msg = f"Errore durante l'invio del messaggio: {str(e)} - Linea {get_line_number()}"
+            error_msg = f"Errore durante l'invio del messaggio: {str(e)}"
             print(error_msg)
             dpg.set_value("logerr", error_msg)
 
@@ -2055,7 +1262,7 @@ def seleziona_cartella_download():
             # Esegui AppleScript
             subprocess.run(["osascript", "-e", applescript], check=False)
         except Exception as e:
-            print(f"Errore nell'esecuzione di AppleScript: {e} - Linea {get_line_number()}")
+            print(f"Errore nell'esecuzione di AppleScript: {e}")
     else:
         # Per Windows e altri sistemi, usa il metodo Tkinter come prima
         script_file = tempfile.mktemp(suffix='.py')
@@ -2118,7 +1325,7 @@ def center_items():
 
     # Aumenta la dimensione dei testi
     dpg.set_value("login_title", "LOGIN")
-    dpg.configure_item("login_title", color=[0, 0, 0])
+    dpg.configure_item("login_title", color=[255, 255, 255])
 
     # Aggiorna dimensioni degli elementi di login
     dpg.set_item_width("spaziatore_sinistro", side_spacer)
@@ -2231,7 +1438,7 @@ def carica_file():
             # Esegui AppleScript
             subprocess.run(["osascript", "-e", applescript], check=False)
         except Exception as e:
-            print(f"Errore nell'esecuzione di AppleScript: {e} - Linea {get_line_number()}")
+            print(f"Errore nell'esecuzione di AppleScript: {e}")
     else:
         # Per Windows e altri sistemi, usa il metodo Tkinter come prima
         script_file = tempfile.mktemp(suffix='.py')
@@ -2284,47 +1491,6 @@ if file_path:
         carica_file.in_progress = False
 
 
-def setup_light_theme():
-    with dpg.theme() as global_theme:
-        with dpg.theme_component(dpg.mvAll):
-            # Set background to white/light
-            dpg.add_theme_color(dpg.mvThemeCol_WindowBg, [240, 240, 240])
-            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, [250, 250, 250])
-            dpg.add_theme_color(dpg.mvThemeCol_PopupBg, [245, 245, 245])
-
-            # Set text to dark
-            dpg.add_theme_color(dpg.mvThemeCol_Text, [20, 20, 20])
-
-            # Input fields and buttons
-            dpg.add_theme_color(dpg.mvThemeCol_Button, [200, 200, 200])
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [180, 180, 180])
-            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [160, 160, 160])
-
-            # Frame backgrounds and borders
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, [220, 220, 220])
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, [210, 210, 210])
-            dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, [200, 200, 200])
-            dpg.add_theme_color(dpg.mvThemeCol_Border, [150, 150, 150])
-
-            # Headers and tabs
-            dpg.add_theme_color(dpg.mvThemeCol_Tab, [220, 220, 220])
-            dpg.add_theme_color(dpg.mvThemeCol_TabHovered, [200, 200, 200])
-            dpg.add_theme_color(dpg.mvThemeCol_TabActive, [230, 230, 230])
-            dpg.add_theme_color(dpg.mvThemeCol_TabUnfocused, [210, 210, 210])
-            dpg.add_theme_color(dpg.mvThemeCol_TabUnfocusedActive, [220, 220, 220])
-
-            # Title
-            dpg.add_theme_color(dpg.mvThemeCol_TitleBg, [220, 220, 220])
-            dpg.add_theme_color(dpg.mvThemeCol_TitleBgActive, [200, 200, 200])
-
-            # Scrollbar
-            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarBg, [235, 235, 235])
-            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrab, [180, 180, 180])
-            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabHovered, [160, 160, 160])
-            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabActive, [140, 140, 140])
-
-    return global_theme
-
 def create_gui():
     with dpg.window(label="Chat", tag="window"):
         with dpg.tab_bar(tag="tab_bar"):
@@ -2335,7 +1501,7 @@ def create_gui():
 
                     with dpg.group():  # Gruppo verticale per gli elementi di login
                         dpg.add_spacer(height=SPACING * 13)  # Spaziatore in alto
-                        dpg.add_text("LOGIN", tag="login_title", color=[0, 0, 0])
+                        dpg.add_text("LOGIN", tag="login_title", color=[255, 255, 255])
                         dpg.add_spacer(height=SPACING)
                         dpg.add_input_text(label="Username", tag="username")
                         dpg.add_spacer(height=SPACING)
@@ -2349,7 +1515,7 @@ def create_gui():
                             dpg.add_button(label="Register", tag="register_button", callback=registrati)
 
                         dpg.add_spacer(height=SPACING)
-                        dpg.add_text("", tag="logerr", color=(180, 0, 0))  # Colore rosso per errori
+                        dpg.add_text("", tag="logerr", color=(255, 0, 0))  # Colore rosso per errori
                         dpg.add_spacer(height=SPACING * 2)  # Spaziatore in basso
 
                     dpg.add_spacer(tag="spaziatore_destro", width=300)  # Spaziatore a destra
@@ -2357,7 +1523,7 @@ def create_gui():
             # Tab Chat
             with dpg.tab(label="chat_globale", tag="chat", show=False):
                 dpg.add_spacer(height=5)
-                dpg.add_text("CHAT GLOBALE", tag="chat_title", color=[0, 0, 0])
+                dpg.add_text("CHAT GLOBALE", tag="chat_title", color=[255, 255, 255])
                 dpg.add_input_text(
                     tag="chatlog_field", multiline=True, readonly=True, tracked=True,
                     track_offset=1)
@@ -2392,7 +1558,7 @@ def create_gui():
                 with dpg.group(horizontal=True):
                     # finestra a sinistra con la lista dei contatti
                     with dpg.child_window(tag="pannello_contatti", width=250, border=True):
-                        dpg.add_text("Contatti", color=[0, 0, 0])
+                        dpg.add_text("Contatti", color=[255, 255, 255])
                         dpg.add_separator()
 
                         # finestra con la lista dei contatti
@@ -2408,8 +1574,8 @@ def create_gui():
                     with dpg.child_window(tag="chat_attiva", width=-1, border=True):
                         # titolo/nome della chat
                         with dpg.group(horizontal=True, tag="Nome_chat"):
-                            dpg.add_text("Seleziona una chat", tag="titolo_chat_attiva", color=[0, 0, 0])
-                            dpg.add_spacer(width=345)
+                            dpg.add_text("Seleziona una chat", tag="titolo_chat_attiva")
+                            dpg.add_spacer(width=355)
                             dpg.add_button(label="Chiama", tag="btn_chiama_privato", callback=lambda:chiama_privato(True), width=70)
                             dpg.add_button(label="Videochiama", tag="btn_videochiama_privato", callback=lambda:videochiama_privato(True), width=90)
 
@@ -2417,22 +1583,22 @@ def create_gui():
 
                         # Chat log privata
                         dpg.add_input_text(tag="chatlog_field_privata", multiline=True,
-                                           readonly=True, height=-70, width=680)
+                                           readonly=True, height=-70, width=-1)
 
                         # Area di input
                         with dpg.group(horizontal=True):
                             dpg.add_input_text(tag="input_txt_chat_privata", multiline=False, width=-100)
                             dpg.add_button(label="Invia", tag="btn_invia_messaggio_privato",
-                                           callback=invia_messaggio_privato, width=90)
+                                           callback=invia_messaggio_privato, width=80)
 
                         with dpg.group(horizontal=True):
                             dpg.add_input_text(tag="file_field_privata", multiline=False, readonly=True, width=-120)
                             dpg.add_button(label="File", tag="btn_file_chat_privata", callback=select_private_file,
-                                           width=90)
+                                           width=100)
 
 
 def chiama_privato(is_you_calling):
-    global chiamata_in_corso, socket_chiamata, is_video, InputStream, OutputStream, VideoCapture, p, utente_in_chiamata
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
 
     try:
         if is_you_calling:
@@ -2455,13 +1621,13 @@ def chiama_privato(is_you_calling):
             client_socket.send(comando.encode('utf-8'))
 
     except Exception as e:
-        print(f"Errore nella richiesta di chiamata: {e} - Linea {get_line_number()}")
+        print(f"Errore nella richiesta di chiamata: {e}")
         dpg.configure_item("btn_chiama_privato", enabled=True)
         dpg.configure_item("btn_videochiama_privato", enabled=True)
 
 
 def videochiama_privato(is_you_calling):  # se sei tu a chiamare allora t aspetti una risposta
-    global chiamata_in_corso, socket_chiamata, is_video, InputStream, OutputStream, VideoCapture, p, utente_in_chiamata
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
     try:
         if is_you_calling:
             dpg.configure_item("btn_chiama_privato", enabled=False)
@@ -2480,7 +1646,7 @@ def videochiama_privato(is_you_calling):  # se sei tu a chiamare allora t aspett
             print(f"Richiedo IP per videochiamare {utente_da_chiamare}")
             client_socket.send(comando.encode('utf-8'))
     except Exception as e:
-        print(f"Errore nella richiesta di videochiamata: {e} - Linea {get_line_number()}")
+        print(f"Errore nella richiesta di videochiamata: {e}")
         dpg.configure_item("btn_chiama_privato", enabled=True)
         dpg.configure_item("btn_videochiama_privato", enabled=True)
 
@@ -2488,25 +1654,33 @@ def videochiama_privato(is_you_calling):  # se sei tu a chiamare allora t aspett
 def mostra_finestra_chiamata(risposta):
     """
     Mostra la finestra di chiamata in base alla risposta ricevuta.
-    Layout migliorato con frame video affiancati orizzontalmente e pulsanti ingranditi.
+    Versione ottimizzata per compatibilità con Mac e problemi AGX.
 
     Risposte possibili:
     - "ACCEPTED": Chiamata accettata, mostra finestra completa
     - "REFUSED": Chiamata rifiutata
     - "UNREACHABLE", "TIMEOUT", "ERROR": Problemi di connessione
     """
-    global utente_in_chiamata, call_requests_thread
+    global utente_in_chiamata, is_video
 
     # Debug per verificare che la funzione venga chiamata
     print(f"mostra_finestra_chiamata chiamata con risposta: {risposta}, utente: {utente_in_chiamata}")
 
-    # Se esiste già una finestra di chiamata, eliminiamola prima
-    if dpg.does_item_exist("finestra_chiamata"):
-        dpg.delete_item("finestra_chiamata")
+    # Pulizia preventiva di qualsiasi finestra o risorsa esistente
+    try:
+        # Se esiste già una finestra di chiamata, eliminiamola prima
+        if dpg.does_item_exist("finestra_chiamata"):
+            dpg.delete_item("finestra_chiamata")
+            print("Finestra chiamata precedente eliminata")
 
-    # Se esiste già un registro texture, eliminiamolo
-    if dpg.does_item_exist("registro_chiamata"):
-        dpg.delete_item("registro_chiamata")
+        # Se esiste già un registro texture, eliminiamolo con cautela
+        if dpg.does_item_exist("registro_chiamata"):
+            dpg.delete_item("registro_chiamata")
+            print("Registro texture precedente eliminato")
+            # Su Mac, a volte serve un piccolo ritardo dopo la rimozione di texture
+            time.sleep(0.1)
+    except Exception as e:
+        print(f"Errore durante la pulizia delle risorse: {e}")
 
     # Calcola dimensioni in base al testo e alla viewport
     viewport_width = dpg.get_viewport_width()
@@ -2514,8 +1688,8 @@ def mostra_finestra_chiamata(risposta):
 
     # Per gli stati di errore, mostriamo solo un messaggio semplice
     if risposta in ["UNREACHABLE", "TIMEOUT", "ERROR", "REFUSED"]:
-        window_width = 350
-        window_height = 160
+        window_width = 300
+        window_height = 150
         window_pos = [viewport_width // 2 - window_width // 2, viewport_height // 2 - window_height // 2]
 
         # Costruisci il messaggio in base alla risposta
@@ -2536,113 +1710,116 @@ def mostra_finestra_chiamata(risposta):
             message = f"Chiamata rifiutata da {utente_in_chiamata}."
             details = "L'utente ha rifiutato la chiamata."
 
+        # Crea la finestra di errore
         try:
             with dpg.window(label=title, tag="finestra_chiamata",
                             modal=True, width=window_width, height=window_height,
                             pos=window_pos, no_resize=True, no_close=True):
                 dpg.add_spacer(height=10)
-                dpg.add_text(message, color=[0, 50, 50])
-                dpg.add_text(details, wrap=280, color=[0, 0, 0])
+                dpg.add_text(message, color=[255, 100, 100])
+                dpg.add_text(details, wrap=280)
                 dpg.add_spacer(height=20)
 
                 # Centra il pulsante
                 button_width = 100
-                dpg.add_spacer(width=(window_width - button_width) // 2)
-                dpg.add_button(label="OK", width=button_width, callback=lambda: dpg.delete_item("finestra_chiamata"))
+                with dpg.group(horizontal=True):
+                    dpg.add_spacer(width=(window_width - button_width) // 2)
+                    dpg.add_button(label="OK", width=button_width,
+                                   callback=lambda: dpg.delete_item("finestra_chiamata"))
 
             print(f"Finestra di errore creata: {title}")
         except Exception as e:
-            print(f"Errore nella creazione della finestra di errore: {e} - Linea {get_line_number()}")
+            print(f"Errore nella creazione della finestra di errore: {e}")
 
         # Riabilitiamo i pulsanti di chiamata
         dpg.configure_item("btn_videochiama_privato", enabled=True)
         dpg.configure_item("btn_chiama_privato", enabled=True)
         return
 
-    if call_requests_thread:
-        termina_thread_listen_for_calls = True
-        call_requests_thread = None
-
-    # Per chiamate accettate, mostra la finestra completa con layout migliorato
+    # Per chiamate accettate, mostra la finestra completa
     try:
-        # Nuove dimensioni per avere i video affiancati
-        # Per videochiamate: finestra più larga per contenere i due video affiancati
-        # Per chiamate solo audio: finestra più piccola
+        # Configura la dimensione della finestra
+        call_window_width = 400
+        call_window_height = 500 if is_video else 200  # Altezza ridotta se non è una videochiamata
+        call_window_pos = [viewport_width // 2 - call_window_width // 2,
+                           viewport_height // 2 - call_window_height // 2]
+
+        # Crea la texture registry prima della finestra
         if is_video:
-            call_window_width = 660  # Sufficiente per 2 video affiancati (320*2 + margini)
-            call_window_height = 450  # Altezza singolo video + controlli + margini
-        else:
-            call_window_width = 400  # Finestra più piccola per solo audio
-            call_window_height = 180  # Altezza ridotta per solo audio
-
-        call_window_pos = [viewport_width // 2 - call_window_width // 2, viewport_height // 2 - call_window_height // 2]
-
-        with dpg.window(label=f"Chiamata con {utente_in_chiamata}", tag="finestra_chiamata",
-                        modal=True, width=call_window_width, height=call_window_height,
-                        pos=call_window_pos, no_resize=True, no_close=True):
-
-            # Crea le texture solo se si tratta di una videochiamata
-            if is_video:
+            # Crea il registro texture per i video
+            try:
                 with dpg.texture_registry(tag="registro_chiamata"):
-                    # Texture per il video del mittente (tu)
+                    # Texture per il video del mittente (tu) - con dimensioni compatibili AGX
+                    width, height = 320, 240
+                    width = width - (width % 4)  # Assicura multiplo di 4
+
+                    # Crea texture con allineamento corretto
                     dpg.add_raw_texture(
-                        width=320, height=240,
-                        default_value=np.zeros(320 * 240 * 3, dtype=np.float32),
+                        width=width, height=height,
+                        default_value=np.zeros(width * height * 3, dtype=np.float32),
                         format=dpg.mvFormat_Float_rgb,
                         tag="texture_mittente"
                     )
 
                     # Texture per il video del destinatario
                     dpg.add_raw_texture(
-                        width=320, height=240,
-                        default_value=np.zeros(320 * 240 * 3, dtype=np.float32),
+                        width=width, height=height,
+                        default_value=np.zeros(width * height * 3, dtype=np.float32),
                         format=dpg.mvFormat_Float_rgb,
                         tag="texture_destinatario"
                     )
+                print("Registro texture creato con successo")
+            except Exception as e:
+                print(f"Errore nella creazione del registro texture: {e}")
+                is_video = False  # Disattiva il video in caso di problemi
 
-                # Gruppo orizzontale per i video affiancati
-                with dpg.group(horizontal=True):
-                    # Video locale
-                    with dpg.group():
-                        dpg.add_text("Tu", color=[0, 0, 0])
-                        dpg.add_image(texture_tag="texture_mittente", tag="video_mittente", width=320, height=240)
+        # Crea la finestra principale dopo la texture registry
+        with dpg.window(label=f"Chiamata con {utente_in_chiamata}", tag="finestra_chiamata",
+                        modal=True, width=call_window_width, height=call_window_height,
+                        pos=call_window_pos, no_resize=True, no_close=True):
 
-                    # Piccolo spazio tra i video
-                    dpg.add_spacer(width=10)
+            # Collega le immagini alle texture se è una videochiamata
+            if is_video and dpg.does_item_exist("registro_chiamata"):
+                try:
+                    # Immagini video
+                    dpg.add_text("Il mio video:", color=[220, 220, 220])
+                    dpg.add_image(texture_tag="texture_mittente", tag="video_mittente",
+                                  width=width, height=height)
 
-                    # Video remoto
-                    with dpg.group():
-                        dpg.add_text(f"{utente_in_chiamata}", color=[0, 0, 0])
-                        dpg.add_image(texture_tag="texture_destinatario", tag="video_destinatario", width=320,
-                                      height=240)
+                    dpg.add_separator()
+                    dpg.add_spacer(height=5)
+
+                    dpg.add_text(f"Video di {utente_in_chiamata}:", color=[220, 220, 220])
+                    dpg.add_image(texture_tag="texture_destinatario", tag="video_destinatario",
+                                  width=width, height=height)
+                except Exception as e:
+                    print(f"Errore nell'aggiunta delle immagini video: {e}")
 
             # Aggiungi informazioni sulla chiamata
-            dpg.add_text(f"In chiamata con: {utente_in_chiamata}", color=[0, 0, 0])
-            dpg.add_text("Stato: Connesso", color=[50, 0, 50])
+            dpg.add_spacer(height=10)
+            dpg.add_text(f"In chiamata con: {utente_in_chiamata}", color=[255, 255, 255])
+            dpg.add_text("Stato: Connesso", color=[100, 255, 100])
             dpg.add_separator()
 
-            # Controlli della chiamata con pulsanti più grandi e proporzionati
-            dpg.add_spacer(height=10)
+            # Controlli della chiamata - centrati
+            button_width = 120
+            spacing = 10
 
-            # Calcola dimensioni pulsanti in base alla finestra
+            # Calcola larghezza totale dei pulsanti
             if is_video:
-                button_count = 3  # Termina, Video, Audio
-                button_width = 170  # Pulsanti più grandi
-                button_height = 40  # Altezza aumentata
-                spacing = 10
-                total_width = button_count * button_width + (button_count - 1) * spacing
-                left_margin = (call_window_width - total_width) // 2
+                total_buttons = 3  # Termina, Video, Audio
+                total_buttons_width = total_buttons * button_width + (total_buttons - 1) * spacing
             else:
-                button_count = 2  # Termina, Audio
-                button_width = 170  # Pulsanti più grandi
-                button_height = 40  # Altezza aumentata
-                spacing = 10
-                total_width = button_count * button_width + (button_count - 1) * spacing
-                left_margin = (call_window_width - total_width) // 2
+                total_buttons = 2  # Termina, Audio
+                total_buttons_width = total_buttons * button_width + (total_buttons - 1) * spacing
 
-            # Centra i pulsanti orizzontalmente
+            left_margin = (call_window_width - total_buttons_width) // 2
+
+            dpg.add_spacer(height=15)
+
+            # Layout a griglia centrato per i pulsanti
             with dpg.group(horizontal=True):
-                # Aggiungi margine a sinistra per centrare
+                # Margine sinistro
                 dpg.add_spacer(width=left_margin)
 
                 # Pulsante Termina (rosso)
@@ -2651,11 +1828,14 @@ def mostra_finestra_chiamata(risposta):
                         dpg.add_theme_color(dpg.mvThemeCol_Button, [150, 40, 40])  # Rosso normale
                         dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [180, 60, 60])  # Rosso hover
                         dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [120, 30, 30])  # Rosso cliccato
-                        dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+                        dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Bianco
 
-                dpg.add_button(label="Termina", tag="btn_termina_chiamata", width=button_width, height=button_height,
+                dpg.add_button(label="Termina", tag="btn_termina_chiamata", width=button_width,
                                callback=termina_chiamata)
                 dpg.bind_item_theme(dpg.last_item(), termina_theme)
+
+                # Spaziatore tra i pulsanti
+                dpg.add_spacer(width=spacing)
 
                 # Pulsante Video (blu) - solo per videochiamate
                 if is_video:
@@ -2664,12 +1844,15 @@ def mostra_finestra_chiamata(risposta):
                             dpg.add_theme_color(dpg.mvThemeCol_Button, [40, 80, 150])  # Blu normale
                             dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [60, 100, 180])  # Blu hover
                             dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [30, 60, 120])  # Blu cliccato
-                            dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+                            dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Bianco
 
                     video_label = "Disattiva Video" if is_video_on else "Attiva Video"
-                    dpg.add_button(label=video_label, tag="btn_video", width=button_width, height=button_height,
+                    dpg.add_button(label=video_label, tag="btn_video", width=button_width,
                                    callback=attiva_disattiva_video)
                     dpg.bind_item_theme(dpg.last_item(), video_theme)
+
+                    # Spaziatore tra i pulsanti
+                    dpg.add_spacer(width=spacing)
 
                 # Pulsante Audio (verde)
                 with dpg.theme() as audio_theme:
@@ -2677,492 +1860,470 @@ def mostra_finestra_chiamata(risposta):
                         dpg.add_theme_color(dpg.mvThemeCol_Button, [46, 120, 50])  # Verde normale
                         dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [66, 150, 70])  # Verde hover
                         dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [36, 100, 40])  # Verde cliccato
-                        dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Testo bianco
+                        dpg.add_theme_color(dpg.mvThemeCol_Text, [255, 255, 255])  # Bianco
 
                 audio_label = "Disattiva Audio" if is_audio_on else "Attiva Audio"
-                dpg.add_button(label=audio_label, tag="btn_audio", width=button_width, height=button_height,
+                dpg.add_button(label=audio_label, tag="btn_audio", width=button_width,
                                callback=attiva_disattiva_audio)
                 dpg.bind_item_theme(dpg.last_item(), audio_theme)
 
+            # Informazioni tecniche per il debug
+            dpg.add_spacer(height=10)
+            with dpg.collapsing_header(label="Informazioni di Debug", default_open=False):
+                dpg.add_text(f"Tipo: {'Video' if is_video else 'Audio'}")
+                dpg.add_text(f"Audio: {'Attivo' if is_audio_on else 'Disattivato'}")
+                if is_video:
+                    dpg.add_text(f"Video: {'Attivo' if is_video_on else 'Disattivato'}")
+                dpg.add_text(f"IP: {socket_chiamata.getpeername()[0] if socket_chiamata else 'N/A'}")
+
         print(f"Finestra di chiamata creata per {utente_in_chiamata}, tipo: {risposta}")
+
     except Exception as e:
-        print(f"Errore nella creazione della finestra di chiamata: {e} - Linea {get_line_number()}")
+        print(f"Errore nella creazione della finestra di chiamata: {e}")
+        # Log dettagliato per debug
+        import traceback
+        traceback.print_exc()
+
         # In caso di errore, riabilitiamo comunque i pulsanti
-        dpg.configure_item("btn_videochiama_privato", enabled=True)
-        dpg.configure_item("btn_chiama_privato", enabled=True)
-
-
-# Funzioni complementari che devono essere aggiornate per mantenere la coerenza
+        try:
+            dpg.configure_item("btn_videochiama_privato", enabled=True)
+            dpg.configure_item("btn_chiama_privato", enabled=True)
+        except:
+            pass
 
 def attiva_disattiva_video():
-    """Attiva o disattiva la webcam durante una videochiamata."""
     global is_video_on
-
-    # Inverti lo stato del video
-    is_video_on = not is_video_on
-
-    # Aggiorna l'etichetta del pulsante
-    if dpg.does_item_exist("btn_video"):
-        new_label = "Disattiva Video" if is_video_on else "Attiva Video"
-        dpg.set_item_label("btn_video", new_label)
-
-    print(f"Video {'attivato' if is_video_on else 'disattivato'}")
-
+    if is_video_on:
+        is_video_on = False
+    else:
+        is_video_on = True
 
 def attiva_disattiva_audio():
-    """Attiva o disattiva il microfono durante una chiamata."""
     global is_audio_on
-
-    # Inverti lo stato dell'audio
-    is_audio_on = not is_audio_on
-
-    # Aggiorna l'etichetta del pulsante
-    if dpg.does_item_exist("btn_audio"):
-        new_label = "Disattiva Audio" if is_audio_on else "Attiva Audio"
-        dpg.set_item_label("btn_audio", new_label)
-
-    print(f"Audio {'attivato' if is_audio_on else 'disattivato'}")
+    if is_audio_on:
+        is_audio_on = False
+    else:
+        is_audio_on = True
 
 
 def aggiorna_video_remoto(frame_remoto):
-    """Aggiorna la texture remota con il nuovo frame."""
+    """
+    Aggiorna la texture del video remoto in modo sicuro, gestendo le particolarità
+    delle GPU Apple (AGX).
+    """
     if not dpg.does_item_exist("texture_destinatario") or frame_remoto is None:
         return
 
     try:
         # Converti e formatta il frame
         frame_rgb = cv2.cvtColor(frame_remoto, cv2.COLOR_BGR2RGB)
-        frame_resized = cv2.resize(frame_rgb, (320, 240))
-        frame_float = frame_resized.astype(np.float32) / 255.0  # Normalizza a [0,1]
 
-        # Aggiorna la texture solo se l'interfaccia è visibile e la finestra esiste
-        if dpg.does_item_exist("finestra_chiamata") and dpg.is_item_visible("finestra_chiamata"):
+        # Determina le dimensioni con allineamento corretto
+        # La chiave per i dispositivi Apple è garantire che width * 3 (per RGB) sia divisibile per 4
+        width, height = 320, 240
+        while (width * 3) % 4 != 0:
+            width -= 1  # Riduci la larghezza finché non è correttamente allineata
+
+        # Ridimensiona il frame alla dimensione corretta
+        frame_resized = cv2.resize(frame_rgb, (width, height))
+
+        # Usa formato float con padding corretto
+        frame_float = frame_resized.astype(np.float32) / 255.0
+
+        # Gestione sicura dell'aggiornamento della texture
+        try:
+            # Importante: rendi l'array contiguous in memoria
+            if not frame_float.flags['C_CONTIGUOUS']:
+                frame_float = np.ascontiguousarray(frame_float)
+
+            # Aggiorna la texture
             dpg.set_value("texture_destinatario", frame_float.ravel())
+        except Exception as e:
+            print(f"Errore nell'aggiornamento della texture remota: {e}")
+
     except Exception as e:
-        # Ignora errori di aggiornamento UI per non bloccare il thread video
-        pass
+        print(f"Errore nella preparazione del frame remoto: {e}")
+
 
 def aggiorna_video_locale(frame):
-    """Aggiorna la texture locale con il nuovo frame."""
+    """
+    Aggiorna la texture del video locale in modo sicuro, gestendo le particolarità
+    delle GPU Apple (AGX).
+    """
     if not dpg.does_item_exist("texture_mittente") or frame is None:
         return
 
     try:
-        # Converti e formatta il frame in modo efficiente
+        # Converti e formatta il frame
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_resized = frame_rgb  # Il frame è già stato ridimensionato nella funzione chiamante
-        frame_float = frame_resized.astype(np.float32) / 255.0  # Normalizza a [0,1]
 
-        # Aggiorna la texture solo se l'interfaccia è visibile e la finestra esiste
-        if dpg.does_item_exist("finestra_chiamata") and dpg.is_item_visible("finestra_chiamata"):
+        # Determina le dimensioni con allineamento corretto
+        # La chiave per i dispositivi Apple è garantire che width * 3 (per RGB) sia divisibile per 4
+        width, height = 320, 240
+        while (width * 3) % 4 != 0:
+            width -= 1  # Riduci la larghezza finché non è correttamente allineata
+
+        # Ridimensiona il frame alla dimensione corretta
+        frame_resized = cv2.resize(frame_rgb, (width, height))
+
+        # Usa formato float con padding corretto
+        frame_float = frame_resized.astype(np.float32) / 255.0
+
+        # Gestione sicura dell'aggiornamento della texture
+        try:
+            # Importante: rendi l'array contiguous in memoria
+            if not frame_float.flags['C_CONTIGUOUS']:
+                frame_float = np.ascontiguousarray(frame_float)
+
+            # Aggiorna la texture
             dpg.set_value("texture_mittente", frame_float.ravel())
+        except Exception as e:
+            print(f"Errore nell'aggiornamento della texture locale: {e}")
+
     except Exception as e:
-        # Ignora errori di aggiornamento UI per non bloccare il thread video
-        pass
+        print(f"Errore nella preparazione del frame locale: {e}")
 
 
-def gestisci_invio_video():
-    global is_video, is_video_on, socket_chiamata, socket_chiamata_invio_video, ip_chiamata_destinatario
+def gestisci_video():
+    """
+    Gestisce l'invio e la ricezione di video durante una videochiamata.
+    Ottimizzato per prestazioni e compatibilità con GPU Apple.
+    """
+    global is_video, is_video_on, socket_chiamata, VideoCapture, chiamata_in_corso
 
-    # Set high priority for this thread
-    set_thread_priority("video")
+    if VideoCapture is None:
+        print("Errore: VideoCapture non inizializzato")
+        return
 
-    # Frame rate control variables
-    last_frame_time = time.time()
-    frame_interval = 0.033  # ~30 FPS
-    sequence = 0
-
-    print("Avvio thread invio video (UDP)")
+    print("Avvio thread gestione video")
 
     try:
-        # Main sending loop
+        # Ottimizzazione frequenza fotogrammi
+        fps = 15  # Ridotto da 20 a 15 per diminuire il carico
+        frame_interval = 1.0 / fps
+        last_frame_time = 0
+
         while is_video_on and socket_chiamata and chiamata_in_corso:
             current_time = time.time()
 
-            # Frame rate limiting
+            # Limita la frequenza dei fotogrammi
             if current_time - last_frame_time < frame_interval:
-                time.sleep(0.001)
+                time.sleep(0.005)  # Breve pausa per ridurre l'uso della CPU
                 continue
 
             last_frame_time = current_time
 
-            # Capture frame from webcam
+            # Cattura frame dalla webcam
             ret, frame = VideoCapture.read()
             if not ret:
-                time.sleep(0.005)
+                time.sleep(0.1)  # Pausa per il prossimo tentativo
                 continue
 
-            # Resize and compress frame
-            frame = cv2.resize(frame, (320, 240))
-            frame = cv2.flip(frame, 1)
-
-            # Update local preview
+            # Aggiorna il video locale
             try:
-                if dpg.does_item_exist("texture_mittente"):
-                    aggiorna_video_locale(frame)
-            except:
-                pass
-
-            # Compress frame with reduced quality for better network performance
-            _, encoded_frame = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 30])
-            data = encoded_frame.tobytes()
-
-            # Add sequence number to detect packet loss
-            header = struct.pack('!I', sequence)
-            packet = header + data
-
-            # Get packet size (needed by receiver to reconstruct data)
-            size = len(data)
-            size_header = struct.pack('!I', size)
-
-            try:
-                # Send size information + sequence + frame data
-                # We first send the size so receiver knows how much data to expect
-                socket_chiamata_invio_video.sendto(size_header + packet,
-                                                   (ip_chiamata_destinatario, PORT_RICEZIONE_VIDEO))
-                sequence += 1
-
-                # Print occasional stats (every ~300 frames / 10 seconds)
-                if sequence % 300 == 0:
-                    print(f"Video: inviati {sequence} frames, ultimo size={size} bytes")
+                aggiorna_video_locale(frame)
             except Exception as e:
-                print(f"Errore nell'invio del frame: {e} - Linea {get_line_number()}")
+                print(f"Errore nell'aggiornamento del video locale: {e}")
 
-            # Brief sleep to reduce CPU usage
-            time.sleep(0.001)
-
-    except Exception as e:
-        print(f"Errore nella gestione video: {e} - Linea {get_line_number()}")
-    finally:
-        print("Thread invio video terminato")
-
-
-def gestisci_ricezione_video():
-    global is_video, is_video_on, socket_chiamata, socket_chiamata_ricezione_video
-
-    # Set high priority for this thread
-    set_thread_priority("video")
-
-    # Variables for statistics and packet handling
-    frames_received = 0
-    last_stats_time = time.time()
-    expected_sequence = 0
-
-    print("Avvio thread ricezione video (UDP)")
-
-    try:
-        # Main receiving loop
-        while is_video_on and socket_chiamata and chiamata_in_corso:
+            # Compressione e invio del frame solo se la connessione è attiva
             try:
-                # Receive packet containing size + sequence + frame data
-                packet, addr = socket_chiamata_ricezione_video.recvfrom(65536)  # Max UDP packet size
+                if socket_chiamata:
+                    # Determina dimensioni corrette per Apple AGX
+                    width, height = 320, 240
+                    while (width * 3) % 4 != 0:
+                        width -= 1
 
-                if len(packet) <= 8:  # At least need size (4 bytes) + sequence (4 bytes)
-                    continue
+                    # Ridimensiona e comprimi il frame
+                    frame_small = cv2.resize(frame, (width, height))
+                    # Usa una qualità inferiore per ridurre la dimensione dei dati
+                    _, encoded_frame = cv2.imencode('.jpg', frame_small, [cv2.IMWRITE_JPEG_QUALITY, 30])
+                    data = encoded_frame.tobytes()
 
-                # Extract size and sequence
-                size = struct.unpack('!I', packet[:4])[0]
-                sequence = struct.unpack('!I', packet[4:8])[0]
+                    # Invia dimensione e dati del frame
+                    size = len(data)
+                    # Usa struttura a pacchetto per l'invio
+                    packet = struct.pack('!I', size) + data
+                    socket_chiamata.send(packet)
+            except Exception as e:
+                print(f"Errore nell'invio video: {e}")
+                continue  # Continua a provare per il prossimo frame
 
-                # Extract frame data
-                frame_data = packet[8:]
+            # Ricezione frame video
+            try:
+                # Timeout breve per non bloccare
+                socket_chiamata.settimeout(0.1)
 
-                # Check for packet loss
-                if sequence > expected_sequence:
-                    lost = sequence - expected_sequence
-                    print(f"Pacchetti video persi: {lost}")
+                # Leggi l'header con la dimensione
+                size_data = socket_chiamata.recv(4)
+                if size_data and len(size_data) == 4:
+                    size = struct.unpack('!I', size_data)[0]
 
-                expected_sequence = sequence + 1
+                    # Controlla dimensioni ragionevoli per evitare errori
+                    if size > 0 and size < 1000000:  # Max 1MB per frame
+                        # Leggi il frame a blocchi
+                        frame_data = b''
+                        bytes_remaining = size
 
-                # Decode video frame
-                try:
-                    # Convert binary data to numpy array and decode JPEG
-                    nparr = np.frombuffer(frame_data, np.uint8)
-                    frame_remoto = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        while bytes_remaining > 0:
+                            chunk_size = min(bytes_remaining, 4096)
+                            chunk = socket_chiamata.recv(chunk_size)
 
-                    # Only update UI if frame was decoded successfully
-                    if frame_remoto is not None and dpg.does_item_exist("texture_destinatario"):
-                        aggiorna_video_remoto(frame_remoto)
-                        frames_received += 1
-                except Exception as e:
-                    print(f"Errore nella decodifica del frame: {e} - Linea {get_line_number()}")
+                            if not chunk:  # Connessione interrotta
+                                break
 
-                # Print statistics every 5 seconds
-                if time.time() - last_stats_time > 5.0:
-                    print(f"Video: ricevuti {frames_received} frames in 5 secondi")
-                    frames_received = 0
-                    last_stats_time = time.time()
+                            frame_data += chunk
+                            bytes_remaining -= len(chunk)
 
+                        # Verifica che tutti i dati siano stati ricevuti
+                        if len(frame_data) == size:
+                            # Decodifica e mostra il frame
+                            try:
+                                frame_remoto = cv2.imdecode(
+                                    np.frombuffer(frame_data, dtype=np.uint8),
+                                    cv2.IMREAD_COLOR
+                                )
+                                if frame_remoto is not None:
+                                    aggiorna_video_remoto(frame_remoto)
+                            except Exception as e:
+                                print(f"Errore nella decodifica del video: {e}")
             except socket.timeout:
-                # Normal timeout, just continue
+                # Normale in comunicazione non bloccante
                 pass
             except Exception as e:
-                print(f"Errore ricezione video: {e} - Linea {get_line_number()}")
-                time.sleep(0.01)  # Small pause on errors
+                print(f"Errore nella ricezione video: {e}")
+
+            # Pausa breve per ridurre l'uso della CPU
+            time.sleep(0.01)
 
     except Exception as e:
-        print(f"Errore critico nel thread ricezione video: {e} - Linea {get_line_number()}")
+        print(f"Errore critico nel thread video: {e}")
     finally:
-        print("Thread ricezione video terminato")
+        print("Thread video terminato")
 
 
-def gestisci_invio_audio():
-    global chiamata_in_corso, InputStream, OutputStream, is_audio_on, socket_chiamata_invio_audio, ip_chiamata_destinatario
-
-    print("Avvio thread invio audio (UDP)")
-
-    # Set thread priority
-    set_thread_priority("audio")
-
-    sequence = 0
-    last_stats_time = time.time()
-    packets_sent = 0
-
-    try:
-        while chiamata_in_corso:
-            if not is_audio_on:
-                time.sleep(0.01)
-                continue
-
-            try:
-                # Read audio with overflow handling
-
-                audio_data = InputStream.read(CHUNK, exception_on_overflow=False)
-
-                # Add sequence number and send
-                packet = struct.pack('!I', sequence) + audio_data
-                socket_chiamata_invio_audio.sendto(packet, (ip_chiamata_destinatario, PORT_RICEZIONE_AUDIO))
-
-                sequence += 1
-                packets_sent += 1
-
-                # Print stats every 5 seconds
-                if time.time() - last_stats_time > 5.0:
-                    print(f"UDP Audio: inviati {packets_sent} pacchetti in 5 secondi")
-                    packets_sent = 0
-                    last_stats_time = time.time()
-
-            except IOError as e:
-                print(f"Errore lettura audio: {e} - Linea {get_line_number()}")
-                time.sleep(0.01)
-
-            except Exception as e:
-                print(f"Errore invio audio: {e} - Linea {get_line_number()}")
-                time.sleep(0.01)
-
-            # Short sleep to avoid CPU overuse
-            time.sleep(0.001)
-
-    except Exception as e:
-        print(f"Errore critico thread audio: {e} - Linea {get_line_number()}")
-    finally:
-        print("Thread invio audio terminato")
-
-
-def is_socket_connected(sock):
+def gestisci_audio():
     """
-    Verifica se un socket è ancora connesso.
-    Restituisce True se il socket è attivo, False altrimenti.
+    Funzione che gestisce lo streaming audio durante una chiamata.
+    Include la soppressione del feedback audio.
     """
-    if sock is None:
-        return False
+    global chiamata_in_corso, socket_chiamata, audioStream, is_audio_on
 
-    try:
-        # Prova a inviare un dato vuoto (heartbeat)
-        # Se genera errore, il socket è disconnesso
-        sock.settimeout(0.5)
+    print("Avvio thread gestione audio")
 
-        # Tenta di effettuare un'operazione non bloccante
-        # che rivela lo stato della connessione
-        errno = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-        if errno != 0:
-            return False
-
-        # In alternativa, per alcuni socket:
-        # sock.send(b'', socket.MSG_DONTWAIT)
-        return True
-    except Exception:
-        return False
-
-def reconnect_socket(port):
-    new_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    new_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    new_sock.connect((ip_chiamata_destinatario, port))
-    return new_sock
-
-def gestisci_ricezione_audio():
-    """
-    Gestisce la ricezione dell'audio durante una chiamata con gestione robusta errori.
-    """
-    global chiamata_in_corso, socket_chiamata_ricezione_audio, ip_chiamata_destinatario, InputStream, OutputStream
-
-    print("Avvio thread ricezione audio")
-
-    # For receiving audio
-    expected_sequence = 0
-    try:
-        while chiamata_in_corso:
-            try:
-                # Add sequence number to packets when sending
-                if socket_chiamata_ricezione_audio:
-                    data, addr = socket_chiamata_ricezione_audio.recvfrom(CHUNK * 4 + 4)  # +4 for sequence
-                else:
-                    print("No socket")
-                if len(data) < 4:
-                    continue
-
-                sequence = struct.unpack('!I', data[:4])[0]
-                audio_data = data[4:]
-
-                # Handle missing packets - can use simple skip or more advanced interpolation
-                if sequence > expected_sequence:
-                    print(f"Pacchetti audio persi: {sequence - expected_sequence}")
-                    # Could add noise or silence for lost packets
-
-                expected_sequence = sequence + 1
-
-                # Process audio data as before
-
-                OutputStream.write(audio_data)
-
-            except socket.timeout:
-                continue
-    except Exception as e:
-        debug_log(f"Eccezione in thread ricezione audio: {e} - Linea {get_line_number()}")
-    finally:
-        print("Thread ricezione audio terminato")
-        if chiamata_in_corso:
-            # Se stiamo terminando ma la chiamata è ancora attiva, terminiamola
-            threading.Thread(target=termina_chiamata, args=(True,), daemon=True).start()
-
-
-def termina_chiamata(from_error=False):
-    """
-    Termina la chiamata attiva e rilascia le risorse in modo controllato.
-    """
-    global chiamata_in_corso, socket_chiamata, is_video, InputStream, OutputStream, VideoCapture, p, utente_in_chiamata
-    global socket_chiamata_invio_audio, socket_chiamata_invio_video, socket_chiamata_ricezione_audio, socket_chiamata_ricezione_video
-    global socket_comandi_input, socket_comandi_output, call_requests_thread, termina_thread_listen_for_calls
-
-    debug_log("Inizio terminazione chiamata")
-
-    # Previeni chiamate multiple con un flag
-    if not chiamata_in_corso and socket_chiamata is None:
+    # Verifica che lo stream audio sia inizializzato
+    if audioStream is None:
+        print("Errore: audioStream non inizializzato")
         return
 
-    print("Terminazione chiamata...")
+    try:
+        # Imposta buffer per invio e ricezione
+        buffer_size = CHUNK
+        receive_buffer_size = CHUNK * 4  # Buffer più grande per la ricezione
 
-    # Prima di tutto, imposta stato chiamata terminata
+        # Soglia per la soppressione del feedback
+        threshold = 0.1  # Valore da adattare in base alle tue esigenze
+        last_audio_sent = None
+
+        # Loop principale
+        while chiamata_in_corso and socket_chiamata:
+            # Invio audio
+            try:
+                if is_audio_on:
+                    # Leggi dati audio dal microfono
+                    audio_data = audioStream.read(buffer_size, exception_on_overflow=False)
+
+                    # Conversione per elaborazione
+                    audio_array = np.frombuffer(audio_data, dtype=np.int16)
+
+                    # Normalizza per confronto (trasforma in intervallo -1 a 1)
+                    audio_normalized = audio_array.astype(np.float32) / 32768.0
+
+                    # Calcola la potenza del segnale audio
+                    audio_power = np.mean(np.abs(audio_normalized))
+
+                    # Invia i dati audio solo se abbastanza forti
+                    if audio_power > threshold:
+                        # Solo se non è un feedback (confronto con segnale precedente)
+                        if last_audio_sent is None or not is_similar_audio(audio_array, last_audio_sent):
+                            socket_chiamata.send(audio_data)
+                            last_audio_sent = audio_array.copy()
+                    else:
+                        # Assicurati di avere un valore di confronto anche nei momenti di silenzio
+                        last_audio_sent = audio_array.copy()
+
+                # Ricezione audio
+                try:
+                    # Imposta un timeout breve per la ricezione
+                    socket_chiamata.settimeout(0.1)
+
+                    # Ricevi dati audio
+                    audio_ricevuto = socket_chiamata.recv(receive_buffer_size)
+
+                    # Riproduci i dati audio se ci sono
+                    if audio_ricevuto and len(audio_ricevuto) > 0:
+                        audioStream.write(audio_ricevuto)
+
+                except socket.timeout:
+                    # Timeout normale, continua il loop
+                    pass
+                except Exception as e:
+                    print(f"Errore nella ricezione audio: {e}")
+                    # Controlla se la connessione è interrotta
+                    if "Connessione in corso interrotta" in str(e):
+                        termina_chiamata()
+                        chiamata_in_corso = False
+                    # Non interrompere il loop per errori minori
+
+            except Exception as e:
+                print(f"Errore nell'invio audio: {e}")
+                # Piccola pausa per evitare un ciclo troppo rapido in caso di errore
+                time.sleep(0.01)
+
+            # Pausa breve per ridurre l'utilizzo della CPU
+            time.sleep(0.001)
+
+    except Exception as e:
+        print(f"Errore critico nella gestione audio: {e}")
+    finally:
+        print("Thread audio terminato")
+
+
+def is_similar_audio(array1, array2, threshold=0.8):
+    """
+    Confronta due array audio per determinare se sono simili (potenziale feedback).
+    Restituisce True se la correlazione supera la soglia.
+    """
+    if array1 is None or array2 is None or len(array1) != len(array2):
+        return False
+
+    # Calcola la correlazione normalizzata
+    try:
+        # Converti in float per calcolo preciso
+        a1 = array1.astype(np.float32)
+        a2 = array2.astype(np.float32)
+
+        # Normalizza
+        a1 = (a1 - np.mean(a1)) / (np.std(a1) + 1e-8)  # Evita divisione per zero
+        a2 = (a2 - np.mean(a2)) / (np.std(a2) + 1e-8)
+
+        # Calcola la correlazione
+        correlation = np.sum(a1 * a2) / len(a1)
+
+        return abs(correlation) > threshold
+    except:
+        return False
+
+def verifica_connettivita(ip, porta, timeout=2):
+    """
+    Verifica se è possibile stabilire una connessione TCP all'indirizzo e porta specificati.
+    Restituisce True se la connessione è possibile, False altrimenti.
+    """
+    try:
+        # Crea un socket temporaneo
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+
+        # Tenta la connessione
+        result = sock.connect_ex((ip, porta))
+
+        # Chiudi subito il socket
+        sock.close()
+
+        # Se result è 0, la connessione è riuscita
+        return result == 0
+
+    except Exception as e:
+        print(f"Errore nel test di connettività: {e}")
+        return False
+
+def termina_chiamata():
+    """
+    Termina la chiamata attiva, rilascia le risorse e ripristina l'interfaccia.
+    Chiude correttamente tutte le risorse (socket, audio, video).
+    """
+    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+
+    print("Avvio terminazione chiamata...")
+
+    # Prima di tutto, imposta lo stato come non in chiamata
     chiamata_in_corso = False
 
-    # Prova a inviare un comando di terminazione all'altro client
-    try:
-        if socket_comandi_output:
-            socket_comandi_output.sendall(b"TERMINA")
-            debug_log("Comando terminazione inviato")
-    except Exception as e:
-        debug_log(f"Errore invio comando: {str(e)} - Linea {get_line_number()}")
-
-    sockets = [socket_chiamata, socket_comandi_input, socket_comandi_output, socket_chiamata_invio_audio, socket_chiamata_ricezione_audio]
-
-    # Attendi un momento per permettere ai thread di terminare
-    time.sleep(0.3)  # Aumentato per maggiore stabilità
-
-    for sock in sockets:
+    # Invia segnale di fine chiamata se possibile
+    if socket_chiamata:
         try:
-            if sock:
-                sock.shutdown(socket.SHUT_RDWR)
-                sock.close()
-                debug_log(f"Socket {sock.getsockname()} chiuso")
+            socket_chiamata.send("ENDCALL".encode('utf-8'))
+            print("Inviato segnale ENDCALL al peer")
+        except:
+            print("Impossibile inviare segnale di fine chiamata")
+
+        # Chiudi il socket
+        try:
+            socket_chiamata.close()
+            print("Socket di chiamata chiuso")
+        except:
+            print("Errore nella chiusura del socket")
+
+        socket_chiamata = None
+
+    # Rilascia risorse audio
+    if audioStream:
+        try:
+            audioStream.stop_stream()
+            audioStream.close()
+            print("Stream audio chiuso")
         except Exception as e:
-            debug_log(f"Errore chiusura socket: {str(e)} - Linea {get_line_number()}")
+            print(f"Errore nella chiusura dello stream audio: {e}")
 
-    # Chiusura ordinata risorse PyAudio e VideoCapture
-    if VideoCapture:
-        try:
-            VideoCapture.release()
-            print("VideoCapture rilasciato correttamente")
-        except:
-            pass  # Ignora errori
-        VideoCapture = None
+        audioStream = None
 
-    # Chiudi stream audio e PyAudio
-    if InputStream:
-        try:
-            InputStream.stop_stream()
-            InputStream.close()
-            print("InputStream audio chiuso correttamente")
-        except:
-            pass  # Ignora errori
-        InputStream = None
-
-    if OutputStream:
-        try:
-            OutputStream.stop_stream()
-            OutputStream.close()
-            print("OutputStream audio chiuso correttamente")
-        except:
-            pass  # Ignora errori
-        OutputStream = None
-
+    # Rilascia istanza PyAudio
     if p:
         try:
             p.terminate()
-            print("PyAudio terminato correttamente")
-        except:
-            pass  # Ignora errori
+            print("Istanza PyAudio terminata")
+        except Exception as e:
+            print(f"Errore nella terminazione di PyAudio: {e}")
+
         p = None
 
-    # Reimposta le variabili
+    # Rilascia la camera
+    if VideoCapture:
+        try:
+            VideoCapture.release()
+            print("Webcam rilasciata")
+        except Exception as e:
+            print(f"Errore nel rilascio della webcam: {e}")
+
+        VideoCapture = None
+
+    # Ripristina le variabili di stato
     is_video = False
     utente_in_chiamata = ""
 
-    # Chiudi la finestra di chiamata nell'UI
+    # Chiudi finestra di chiamata se esiste
     try:
         if dpg.does_item_exist("finestra_chiamata"):
             dpg.delete_item("finestra_chiamata")
+            print("Finestra di chiamata chiusa")
+    except Exception as e:
+        print(f"Errore nella chiusura della finestra di chiamata: {e}")
 
+    # Chiudi registro texture se esiste
+    try:
         if dpg.does_item_exist("registro_chiamata"):
             dpg.delete_item("registro_chiamata")
-    except:
-        pass  # Ignora errori UI
-
-    # Riattiva i pulsanti di chiamata
-    try:
-        if dpg.does_item_exist("btn_videochiama_privato"):
-            dpg.configure_item("btn_videochiama_privato", enabled=True)
-
-        if dpg.does_item_exist("btn_chiama_privato"):
-            dpg.configure_item("btn_chiama_privato", enabled=True)
-    except:
-        pass  # Ignora errori UI
-
-    # Gestione socket di ascolto chiamate
-    # Usa un approccio più semplice che eviti problemi
-    try:
-        # Crea un nuovo socket di ascolto dopo un timeout più lungo
-        time.sleep(3.0)  # Attesa più lunga per garantire il rilascio della porta
-
-        socket_attesa_chiamate = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        socket_attesa_chiamate.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        socket_attesa_chiamate.settimeout(1.0)
-
-        # Tenta binding con retry
-        try:
-            socket_attesa_chiamate.bind(("0.0.0.0", PORT_CHIAMATE))
-            socket_attesa_chiamate.listen(1)
-            print(f"Socket di ascolto chiamate ricreato con successo su porta {PORT_CHIAMATE}")
-
-            # Avvia nuovo thread
-            call_thread = threading.Thread(target=listen_for_call_request, args=(socket_attesa_chiamate,), daemon=True)
-            call_thread.start()
-            call_requests_thread = call_thread
-        except OSError as e:
-            print(f"Impossibile ricreare socket di ascolto: {e} - Linea {get_line_number()}")
+            print("Registro texture chiuso")
     except Exception as e:
-        print(f"Errore nel riavvio del socket di ascolto: {e} - Linea {get_line_number()}")
+        print(f"Errore nella chiusura del registro texture: {e}")
 
-    print("Terminazione chiamata completata")
+    print("Chiamata terminata con successo")
+
+    # Riabilita i pulsanti di chiamata
+    try:
+        dpg.configure_item("btn_videochiama_privato", enabled=True)
+        dpg.configure_item("btn_chiama_privato", enabled=True)
+    except Exception as e:
+        print(f"Errore nella riattivazione dei pulsanti: {e}")
 
 def select_private_file():
     #Apre un dialog per selezionare un file da inviare in chat privata
@@ -3196,7 +2357,7 @@ def select_private_file():
             # Esegui AppleScript
             subprocess.run(["osascript", "-e", applescript], check=False)
         except Exception as e:
-            print(f"Errore nell'esecuzione di AppleScript: {e} - Linea {get_line_number()}")
+            print(f"Errore nell'esecuzione di AppleScript: {e}")
     else:
         # Per Windows e altri sistemi, usa il metodo Tkinter come prima
         script_file = tempfile.mktemp(suffix='.py')
@@ -3312,7 +2473,7 @@ def invia_messaggio_privato():
             dpg.set_value("file_field_privata", "")
 
         except Exception as e:
-            error_msg = f"Errore nell'invio del file: {e} - Linea {get_line_number()}"
+            error_msg = f"Errore nell'invio del file: {e}"
             dpg.set_value("logerr", error_msg)
 
             # Aggiorna il log con l'errore
@@ -3334,7 +2495,7 @@ def invia_messaggio_privato():
             dpg.set_value("input_txt_chat_privata", "")
 
         except Exception as e:
-            error_msg = f"Errore durante l'invio del messaggio: {str(e)} - Linea {get_line_number()}"
+            error_msg = f"Errore durante l'invio del messaggio: {str(e)}"
             dpg.set_value("logerr", error_msg)
 
 
@@ -3386,9 +2547,7 @@ def aggiorna_lista_contatti():
 
 
 def inizia_chat_con(utente):
-    """Inizia una nuova chat con un utente"""
-    print(f"Inizializzazione chat con utente: {utente}")
-
+    #Inizia una nuova chat con un utente
     if utente not in chat_attive:
         chat_attive[utente] = ""
         aggiorna_lista_contatti()
@@ -3398,7 +2557,7 @@ def inizia_chat_con(utente):
             os.makedirs(private_chat_download_directory)
             print(f"Creata cartella di download: {private_chat_download_directory}")
 
-    print(f"Apertura chat con {utente}")
+    print(f"funzione inizia chat con {utente}")
 
     # Apre la chat con l'utente scelto
     apri_chat_con(utente)
@@ -3408,71 +2567,29 @@ def inizia_chat_con(utente):
         dpg.delete_item("finestra_aggiungi_contatto")
 
 
-def create_callback_for_user(username):
-    """
-    Factory function che crea una funzione di callback specifica per un utente.
-    Questa funzione evita il problema delle closure nelle lambda in Python.
-
-    Args:
-        username: Il nome dell'utente per cui creare la callback
-
-    Returns:
-        Una funzione di callback che chiamerà inizia_chat_con con l'username corretto
-    """
-
-    def callback():
-        print(f"Callback eseguita per l'utente: {username}")
-        inizia_chat_con(username)
-
-    return callback
-
 def mostra_aggiungi_contatti():
-    """
-    Mostra la finestra di dialogo per aggiungere nuovi contatti.
-    Corretto il problema con la callback lambda che usava sempre l'ultimo utente.
-    """
     global utenti_disponibili
 
-    # Se la finestra esiste già, rimuovila prima di ricrearla
     if dpg.does_item_exist("finestra_aggiungi_contatto"):
         dpg.delete_item("finestra_aggiungi_contatto")
 
     with dpg.window(label="Aggiungi contatto", tag="finestra_aggiungi_contatto",
                     modal=True, width=300, height=400):
-        dpg.add_text("Utenti disponibili:", color=[0, 0, 0])
+        dpg.add_text("Utenti disponibili:")
         dpg.add_separator()
 
         with dpg.child_window(tag="lista_utenti_disponibili", height=300, width=-1):
             for user in utenti_disponibili:
-                print(f"Creazione pulsante per utente: {user}")
+                print(user)
+                #if user != nome_utente_personale:  Non mostrare l'utente corrente
+                dpg.add_button(label=user, tag=f"add_user_{user}",
+                                   callback=lambda:inizia_chat_con(user), width=-1) #lambda è una funzione senza nome. Se non facessi così non potrei passare nulla come argomento o mi eseguirebbe subito la funzione con le parentesi
 
-                # utilizzando una factory function per creare la callback
-                callback_fn = create_callback_for_user(user)
-
-                # Creiamo un tag univoco per ogni pulsante basato sull'username
-                button_tag = f"add_user_{user}"
-
-                # Aggiungiamo il pulsante con la callback corretta
-                dpg.add_button(
-                    label=user,
-                    tag=button_tag,
-                    callback=callback_fn,
-                    width=-1
-                )
-
-        # Pulsante per chiudere la finestra
-        dpg.add_button(
-            label="Chiudi",
-            callback=lambda: dpg.delete_item("finestra_aggiungi_contatto"),
-            width=-1
-        )
+        dpg.add_button(label="Chiudi", callback=lambda:dpg.delete_item("finestra_aggiungi_contatto"), width=-1)
 
 
 # Creazione dell'interfaccia
 create_gui()
-
-light_theme = setup_light_theme()
-dpg.bind_theme(light_theme)
 
 # Aggiungi la callback per il ridimensionamento della viewport
 dpg.set_viewport_resize_callback(center_items)
