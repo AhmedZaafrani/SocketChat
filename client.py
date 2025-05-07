@@ -69,7 +69,8 @@ socket_chiamata_ricezione_video = None
 is_video = False
 is_audio_on = True
 is_video_on = True
-audioStream = None
+InputStream = None
+OutputStream = None
 VideoCapture = None
 p = None # istanza di pyaudio
 utente_in_chiamata = ""
@@ -339,7 +340,7 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
     Accetta una chiamata in arrivo e inizializza le risorse audio/video.
     Versione UDP per audio e video.
     """
-    global socket_chiamata, chiamata_in_corso, p, audioStream, VideoCapture, is_video, utente_in_chiamata
+    global socket_chiamata, chiamata_in_corso, p, InputStream, OutputStream, VideoCapture, is_video, utente_in_chiamata
     global socket_chiamata_invio_audio, socket_chiamata_invio_video, socket_chiamata_ricezione_audio, socket_chiamata_ricezione_video
     global socket_comandi_input, socket_comandi_output, ip_chiamata_destinatario
 
@@ -450,34 +451,42 @@ def accetta_chiamata(chiChiama, is_videochiamata, client):
         try:
             # Inizializza PyAudio con impostazioni standard
             p = pyaudio.PyAudio()
-            audioStream = p.open(
-                format=FORMAT,
-                rate=RATE,
-                channels=CHANNEL,
-                input=True,
-                output=True,
-                frames_per_buffer=CHUNK,
-                start=True
-            )
-            print("Stream audio inizializzato con impostazioni standard")
+            print("Moudlo p audio inizializzato con impostazioni standard")
 
         except Exception as e:
             print(f"Errore nell'inizializzazione audio: {e}")
             # Tentativo di fallback con impostazioni minime
+
+        if p:
             try:
-                audioStream = p.open(
+                InputStream = p.open(
                     format=FORMAT,
                     rate=RATE,
                     channels=CHANNEL,
                     input=True,
-                    output=True,
-                    frames_per_buffer=CHUNK
+                    frames_per_buffer=CHUNK,
+                    start=True
                 )
                 print("Stream audio inizializzato con impostazioni base")
             except Exception as e2:
                 print(f"Errore critico nell'inizializzazione audio: {e2}")
 
-        print("Stream audio inizializzato correttamente")
+            print("InputStream audio inizializzato correttamente")
+
+            try:
+                OutputStream = p.open(
+                    format=FORMAT,
+                    rate=RATE,
+                    channels=CHANNEL,
+                    output=True,
+                    frames_per_buffer=CHUNK,
+                    start=True
+                )
+                print("Stream audio inizializzato con impostazioni base")
+            except Exception as e2:
+                print(f"Errore critico nell'inizializzazione audio: {e2}")
+
+            print("OutputStream audio inizializzato correttamente")
 
         # Avvia thread invio audio
         audio_invio_thread = threading.Thread(target=gestisci_invio_audio)
@@ -941,7 +950,7 @@ def call(ip):  # vedi se ha pushato
     Inizia una chiamata audio con l'utente all'IP specificato.
     Versione UDP per audio con gestione errori avanzata.
     """
-    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+    global chiamata_in_corso, socket_chiamata, is_video, InputStream, OutputStream, VideoCapture, p, utente_in_chiamata
     global socket_chiamata_invio_audio, socket_chiamata_ricezione_audio, socket_comandi_input, socket_comandi_output
     global ip_chiamata_destinatario
 
@@ -1066,40 +1075,51 @@ def call(ip):  # vedi se ha pushato
             try:
                 # Inizializza PyAudio con impostazioni standard
                 p = pyaudio.PyAudio()
-                audioStream = p.open(
-                    format=FORMAT,
-                    rate=RATE,
-                    channels=CHANNEL,
-                    input=True,
-                    output=True,
-                    frames_per_buffer=CHUNK,
-                    start=True
-                )
-                print("Stream audio inizializzato con impostazioni standard")
+                print("Moudlo p audio inizializzato con impostazioni standard")
 
             except Exception as e:
                 print(f"Errore nell'inizializzazione audio: {e}")
                 # Tentativo di fallback con impostazioni minime
+
+            if p:
                 try:
-                    audioStream = p.open(
+                    InputStream = p.open(
                         format=FORMAT,
                         rate=RATE,
                         channels=CHANNEL,
                         input=True,
-                        output=True,
-                        frames_per_buffer=CHUNK
+                        frames_per_buffer=CHUNK,
+                        start=True
                     )
                     print("Stream audio inizializzato con impostazioni base")
                 except Exception as e2:
                     print(f"Errore critico nell'inizializzazione audio: {e2}")
-                    # Gestisci l'errore critico
-                    if socket_chiamata:
-                        socket_chiamata.close()
-                        socket_chiamata = None
-                    mostra_finestra_chiamata("ERROR")
-                    dpg.configure_item("btn_videochiama_privato", enabled=True)
-                    dpg.configure_item("btn_chiama_privato", enabled=True)
-                    return
+
+                print("InputStream audio inizializzato correttamente")
+
+                try:
+                    OutputStream = p.open(
+                        format=FORMAT,
+                        rate=RATE,
+                        channels=CHANNEL,
+                        output=True,
+                        frames_per_buffer=CHUNK,
+                        start=True
+                    )
+                    print("Stream audio inizializzato con impostazioni base")
+                except Exception as e2:
+                    print(f"Errore critico nell'inizializzazione audio: {e2}")
+
+
+                print("OutputStream audio inizializzato correttamente")
+
+            if not socket_chiamata:
+                socket_chiamata.close()
+                socket_chiamata = None
+                mostra_finestra_chiamata("ERROR")
+                dpg.configure_item("btn_videochiama_privato", enabled=True)
+                dpg.configure_item("btn_chiama_privato", enabled=True)
+                return
 
             # Aspetta un possibile messaggio di sincronizzazione
             try:
@@ -1506,7 +1526,7 @@ def videocall(ip):
     Inizia una videochiamata con l'utente all'IP specificato.
     Versione UDP per audio e video.
     """
-    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+    global chiamata_in_corso, socket_chiamata, is_video, InputStream, OutputStream, VideoCapture, p, utente_in_chiamata
     global socket_chiamata_invio_audio, socket_chiamata_invio_video, socket_chiamata_ricezione_audio, socket_chiamata_ricezione_video
     global socket_comandi_input, socket_comandi_output, ip_chiamata_destinatario
 
@@ -1587,40 +1607,51 @@ def videocall(ip):
             try:
                 # Inizializza PyAudio con impostazioni standard
                 p = pyaudio.PyAudio()
-                audioStream = p.open(
-                    format=FORMAT,
-                    rate=RATE,
-                    channels=CHANNEL,
-                    input=True,
-                    output=True,
-                    frames_per_buffer=CHUNK,
-                    start=True
-                )
-                print("Stream audio inizializzato con impostazioni standard")
+                print("Moudlo p audio inizializzato con impostazioni standard")
 
             except Exception as e:
                 print(f"Errore nell'inizializzazione audio: {e}")
                 # Tentativo di fallback con impostazioni minime
+
+            if p:
                 try:
-                    audioStream = p.open(
+                    InputStream = p.open(
                         format=FORMAT,
                         rate=RATE,
                         channels=CHANNEL,
                         input=True,
-                        output=True,
-                        frames_per_buffer=CHUNK
+                        frames_per_buffer=CHUNK,
+                        start=True
                     )
                     print("Stream audio inizializzato con impostazioni base")
                 except Exception as e2:
                     print(f"Errore critico nell'inizializzazione audio: {e2}")
-                    # Gestisci l'errore critico
-                    if socket_chiamata:
-                        socket_chiamata.close()
-                        socket_chiamata = None
-                    mostra_finestra_chiamata("ERROR")
-                    dpg.configure_item("btn_videochiama_privato", enabled=True)
-                    dpg.configure_item("btn_chiama_privato", enabled=True)
-                    return
+
+                print("InputStream audio inizializzato correttamente")
+
+                try:
+                    OutputStream = p.open(
+                        format=FORMAT,
+                        rate=RATE,
+                        channels=CHANNEL,
+                        output=True,
+                        frames_per_buffer=CHUNK,
+                        start=True
+                    )
+                    print("Stream audio inizializzato con impostazioni base")
+                except Exception as e2:
+                    print(f"Errore critico nell'inizializzazione audio: {e2}")
+
+                print("OutputStream audio inizializzato correttamente")
+
+                # Gestisci l'errore critico
+            if socket_chiamata:
+                socket_chiamata.close()
+                socket_chiamata = None
+                mostra_finestra_chiamata("ERROR")
+                dpg.configure_item("btn_videochiama_privato", enabled=True)
+                dpg.configure_item("btn_chiama_privato", enabled=True)
+                return
 
             # Crea socket UDP per audio
             socket_chiamata_invio_audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -2368,7 +2399,7 @@ def create_gui():
 
 
 def chiama_privato(is_you_calling):
-    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+    global chiamata_in_corso, socket_chiamata, is_video, InputStream, OutputStream, VideoCapture, p, utente_in_chiamata
 
     try:
         if is_you_calling:
@@ -2397,7 +2428,7 @@ def chiama_privato(is_you_calling):
 
 
 def videochiama_privato(is_you_calling):  # se sei tu a chiamare allora t aspetti una risposta
-    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+    global chiamata_in_corso, socket_chiamata, is_video, InputStream, OutputStream, VideoCapture, p, utente_in_chiamata
     try:
         if is_you_calling:
             dpg.configure_item("btn_chiama_privato", enabled=False)
@@ -2736,6 +2767,7 @@ def gestisci_invio_video():
 
             # Resize and compress frame
             frame = cv2.resize(frame, (320, 240))
+            frame = cv2.flip(frame, 1)
 
             # Update local preview
             try:
@@ -2760,7 +2792,7 @@ def gestisci_invio_video():
                 # Send size information + sequence + frame data
                 # We first send the size so receiver knows how much data to expect
                 socket_chiamata_invio_video.sendto(size_header + packet,
-                                                   (ip_chiamata_destinatario, PORT_INVIO_VIDEO))
+                                                   (ip_chiamata_destinatario, PORT_RICEZIONE_VIDEO))
                 sequence += 1
 
                 # Print occasional stats (every ~300 frames / 10 seconds)
@@ -2848,7 +2880,7 @@ def gestisci_ricezione_video():
 
 
 def gestisci_invio_audio():
-    global chiamata_in_corso, audioStream, is_audio_on, socket_chiamata_invio_audio, ip_chiamata_destinatario
+    global chiamata_in_corso, InputStream, OutputStream, is_audio_on, socket_chiamata_invio_audio, ip_chiamata_destinatario
 
     print("Avvio thread invio audio (UDP)")
 
@@ -2867,12 +2899,12 @@ def gestisci_invio_audio():
 
             try:
                 # Read audio with overflow handling
-                with lock_audio:
-                    audio_data = audioStream.read(CHUNK, exception_on_overflow=False)
+
+                audio_data = InputStream.read(CHUNK, exception_on_overflow=False)
 
                 # Add sequence number and send
                 packet = struct.pack('!I', sequence) + audio_data
-                socket_chiamata_invio_audio.sendto(packet, (ip_chiamata_destinatario, PORT_INVIO_AUDIO))
+                socket_chiamata_invio_audio.sendto(packet, (ip_chiamata_destinatario, PORT_RICEZIONE_AUDIO))
 
                 sequence += 1
                 packets_sent += 1
@@ -2935,7 +2967,7 @@ def gestisci_ricezione_audio():
     """
     Gestisce la ricezione dell'audio durante una chiamata con gestione robusta errori.
     """
-    global chiamata_in_corso, audioStream, socket_chiamata_ricezione_audio, ip_chiamata_destinatario
+    global chiamata_in_corso, socket_chiamata_ricezione_audio, ip_chiamata_destinatario
 
     print("Avvio thread ricezione audio")
 
@@ -2961,8 +2993,8 @@ def gestisci_ricezione_audio():
                 expected_sequence = sequence + 1
 
                 # Process audio data as before
-                with lock_audio:
-                    audioStream.write(audio_data)
+
+                InputStream.write(audio_data)
 
             except socket.timeout:
                 continue
@@ -2979,7 +3011,7 @@ def termina_chiamata(from_error=False):
     """
     Termina la chiamata attiva e rilascia le risorse in modo controllato.
     """
-    global chiamata_in_corso, socket_chiamata, is_video, audioStream, VideoCapture, p, utente_in_chiamata
+    global chiamata_in_corso, socket_chiamata, is_video, InputStream, OutputStream, VideoCapture, p, utente_in_chiamata
     global socket_chiamata_invio_audio, socket_chiamata_invio_video, socket_chiamata_ricezione_audio, socket_chiamata_ricezione_video
     global socket_comandi_input, socket_comandi_output, call_requests_thread, termina_thread_listen_for_calls
 
@@ -3026,14 +3058,23 @@ def termina_chiamata(from_error=False):
         VideoCapture = None
 
     # Chiudi stream audio e PyAudio
-    if audioStream:
+    if InputStream:
         try:
-            audioStream.stop_stream()
-            audioStream.close()
-            print("Stream audio chiuso correttamente")
+            InputStream.stop_stream()
+            InputStream.close()
+            print("InputStream audio chiuso correttamente")
         except:
             pass  # Ignora errori
-        audioStream = None
+        InputStream = None
+
+    if OutputStream:
+        try:
+            OutputStream.stop_stream()
+            OutputStream.close()
+            print("OutputStream audio chiuso correttamente")
+        except:
+            pass  # Ignora errori
+        OutputStream = None
 
     if p:
         try:
