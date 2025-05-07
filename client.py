@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 import sys
@@ -113,6 +114,10 @@ def debug_log(message):
     if DEBUG_MODE:
         print(f"[DEBUG] {datetime.datetime.now().strftime('%H:%M:%S.%f')} - {message}")
 
+def get_line_number():
+    frame = inspect.currentframe().f_back
+    return frame.f_lineno
+
 def get_chat_download_folder(username):
     """Restituisce la cartella dedicata per i download di una specifica chat"""
     global download_folders
@@ -180,9 +185,9 @@ def set_thread_priority(thread_type="audio"):
                 print(f"Priorità thread UI impostata a THREAD_PRIORITY_NORMAL")
 
         except ImportError as e:
-            print(f"Moduli Windows non disponibili: {e}")
+            print(f"Moduli Windows non disponibili: {e} - Linea {get_line_number()}")
         except Exception as e:
-            print(f"Errore nell'impostazione della priorità del thread {thread_type}: {e}")
+            print(f"Errore nell'impostazione della priorità del thread {thread_type}: {e} - Linea {get_line_number()}")
             # Non blocchiamo l'esecuzione per questo errore
 
 def setup_connection_server_FTP():
