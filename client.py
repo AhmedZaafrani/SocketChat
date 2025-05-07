@@ -2977,8 +2977,10 @@ def gestisci_ricezione_audio():
         while chiamata_in_corso:
             try:
                 # Add sequence number to packets when sending
-                data, addr = socket_chiamata_ricezione_audio.recvfrom(CHUNK * 4 + 4)  # +4 for sequence
-
+                if socket_chiamata_ricezione_audio:
+                    data, addr = socket_chiamata_ricezione_audio.recvfrom(CHUNK * 4 + 4)  # +4 for sequence
+                else:
+                    print("No socket")
                 if len(data) < 4:
                     continue
 
@@ -2994,7 +2996,7 @@ def gestisci_ricezione_audio():
 
                 # Process audio data as before
 
-                InputStream.write(audio_data)
+                OutputStream.write(audio_data)
 
             except socket.timeout:
                 continue
