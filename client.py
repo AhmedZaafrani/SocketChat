@@ -911,8 +911,8 @@ def listen_to_server():
                 print(ip_utente_da_chiamare)
                 dpg.configure_item("btn_videochiama_privato", enabled=False)
                 dpg.configure_item("btn_chiama_privato", enabled=False)
-                thread_chiama = threading.Thread(target=videocall, args=(ip_utente_da_chiamare,))
-                thread_chiama.start()
+                thread_videochiama = threading.Thread(target=videocall, args=(ip_utente_da_chiamare,))
+                thread_videochiama.start()
 
             # Gestione file in arrivo
             elif msg == "sending_file":
@@ -1525,6 +1525,7 @@ def videocall(ip):
 
     # Salva l'IP per eventuali riconnessioni
     ip_chiamata_destinatario = ip
+    print("Sono igor")
 
     # Disabilita i pulsanti
     dpg.configure_item("btn_videochiama_privato", enabled=False)
@@ -1538,8 +1539,6 @@ def videocall(ip):
         dpg.configure_item("btn_chiama_privato", enabled=True)
         return
 
-    # Chiudi eventuali socket esistenti
-    termina_chiamata(True)
 
     try:
         is_video = True
