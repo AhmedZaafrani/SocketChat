@@ -608,8 +608,8 @@ def notifica_chiamata(chiChiama, client):
 
             # Aggiunge il messaggio della chiamata
             dpg.add_spacer(height=10)
-            dpg.add_text(f"{chiChiama} ti sta chiamando", color=[255, 255, 255])
-            dpg.add_text(f"Tipo: {call_type}", color=[200, 200, 200])
+            dpg.add_text(f"{chiChiama} ti sta chiamando", color=[0, 0, 0])
+            dpg.add_text(f"Tipo: {call_type}", color=[50, 50, 50])
             dpg.add_separator()
             dpg.add_spacer(height=15)
 
@@ -745,7 +745,7 @@ def notifica_messaggio_privato(daChi):
                         pos=[viewport_width - window_width - margin,
                              viewport_height - window_height - margin]):
             dpg.add_spacer(height=5)
-            dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[255, 255, 255])
+            dpg.add_text(f"{daChi} ti ha mandato un messaggio", color=[0, 0, 0])
             dpg.add_spacer(height=10)
             with dpg.group(horizontal=True):
                 dpg.add_button(label="Apri", tag="btn_notifica_privata", width=125,
@@ -779,7 +779,7 @@ def notifica_messaggio():
                             pos=[viewport_width - window_width - margin,
                                  viewport_height - window_height - margin]):
                 dpg.add_spacer(height=5)
-                dpg.add_text("Hai ricevuto un messaggio globale", color=[255, 255, 255])
+                dpg.add_text("Hai ricevuto un messaggio globale", color=[0, 0, 0])
                 dpg.add_spacer(height=10)
                 with dpg.group(horizontal=True):
                     dpg.add_button(label="Apri", tag="btn_notifica_globale", width=110, callback=apri_globale)
@@ -2118,7 +2118,7 @@ def center_items():
 
     # Aumenta la dimensione dei testi
     dpg.set_value("login_title", "LOGIN")
-    dpg.configure_item("login_title", color=[255, 255, 255])
+    dpg.configure_item("login_title", color=[0, 0, 0])
 
     # Aggiorna dimensioni degli elementi di login
     dpg.set_item_width("spaziatore_sinistro", side_spacer)
@@ -2284,6 +2284,47 @@ if file_path:
         carica_file.in_progress = False
 
 
+def setup_light_theme():
+    with dpg.theme() as global_theme:
+        with dpg.theme_component(dpg.mvAll):
+            # Set background to white/light
+            dpg.add_theme_color(dpg.mvThemeCol_WindowBg, [240, 240, 240])
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, [250, 250, 250])
+            dpg.add_theme_color(dpg.mvThemeCol_PopupBg, [245, 245, 245])
+
+            # Set text to dark
+            dpg.add_theme_color(dpg.mvThemeCol_Text, [20, 20, 20])
+
+            # Input fields and buttons
+            dpg.add_theme_color(dpg.mvThemeCol_Button, [200, 200, 200])
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered, [180, 180, 180])
+            dpg.add_theme_color(dpg.mvThemeCol_ButtonActive, [160, 160, 160])
+
+            # Frame backgrounds and borders
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBg, [220, 220, 220])
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBgHovered, [210, 210, 210])
+            dpg.add_theme_color(dpg.mvThemeCol_FrameBgActive, [200, 200, 200])
+            dpg.add_theme_color(dpg.mvThemeCol_Border, [150, 150, 150])
+
+            # Headers and tabs
+            dpg.add_theme_color(dpg.mvThemeCol_Tab, [220, 220, 220])
+            dpg.add_theme_color(dpg.mvThemeCol_TabHovered, [200, 200, 200])
+            dpg.add_theme_color(dpg.mvThemeCol_TabActive, [230, 230, 230])
+            dpg.add_theme_color(dpg.mvThemeCol_TabUnfocused, [210, 210, 210])
+            dpg.add_theme_color(dpg.mvThemeCol_TabUnfocusedActive, [220, 220, 220])
+
+            # Title
+            dpg.add_theme_color(dpg.mvThemeCol_TitleBg, [220, 220, 220])
+            dpg.add_theme_color(dpg.mvThemeCol_TitleBgActive, [200, 200, 200])
+
+            # Scrollbar
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarBg, [235, 235, 235])
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrab, [180, 180, 180])
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabHovered, [160, 160, 160])
+            dpg.add_theme_color(dpg.mvThemeCol_ScrollbarGrabActive, [140, 140, 140])
+
+    return global_theme
+
 def create_gui():
     with dpg.window(label="Chat", tag="window"):
         with dpg.tab_bar(tag="tab_bar"):
@@ -2294,7 +2335,7 @@ def create_gui():
 
                     with dpg.group():  # Gruppo verticale per gli elementi di login
                         dpg.add_spacer(height=SPACING * 13)  # Spaziatore in alto
-                        dpg.add_text("LOGIN", tag="login_title", color=[255, 255, 255])
+                        dpg.add_text("LOGIN", tag="login_title", color=[0, 0, 0])
                         dpg.add_spacer(height=SPACING)
                         dpg.add_input_text(label="Username", tag="username")
                         dpg.add_spacer(height=SPACING)
@@ -2308,7 +2349,7 @@ def create_gui():
                             dpg.add_button(label="Register", tag="register_button", callback=registrati)
 
                         dpg.add_spacer(height=SPACING)
-                        dpg.add_text("", tag="logerr", color=(255, 0, 0))  # Colore rosso per errori
+                        dpg.add_text("", tag="logerr", color=(180, 0, 0))  # Colore rosso per errori
                         dpg.add_spacer(height=SPACING * 2)  # Spaziatore in basso
 
                     dpg.add_spacer(tag="spaziatore_destro", width=300)  # Spaziatore a destra
@@ -2316,7 +2357,7 @@ def create_gui():
             # Tab Chat
             with dpg.tab(label="chat_globale", tag="chat", show=False):
                 dpg.add_spacer(height=5)
-                dpg.add_text("CHAT GLOBALE", tag="chat_title", color=[255, 255, 255])
+                dpg.add_text("CHAT GLOBALE", tag="chat_title", color=[0, 0, 0])
                 dpg.add_input_text(
                     tag="chatlog_field", multiline=True, readonly=True, tracked=True,
                     track_offset=1)
@@ -2351,7 +2392,7 @@ def create_gui():
                 with dpg.group(horizontal=True):
                     # finestra a sinistra con la lista dei contatti
                     with dpg.child_window(tag="pannello_contatti", width=250, border=True):
-                        dpg.add_text("Contatti", color=[255, 255, 255])
+                        dpg.add_text("Contatti", color=[0, 0, 0])
                         dpg.add_separator()
 
                         # finestra con la lista dei contatti
@@ -2367,7 +2408,7 @@ def create_gui():
                     with dpg.child_window(tag="chat_attiva", width=-1, border=True):
                         # titolo/nome della chat
                         with dpg.group(horizontal=True, tag="Nome_chat"):
-                            dpg.add_text("Seleziona una chat", tag="titolo_chat_attiva")
+                            dpg.add_text("Seleziona una chat", tag="titolo_chat_attiva", color=[0, 0, 0])
                             dpg.add_spacer(width=345)
                             dpg.add_button(label="Chiama", tag="btn_chiama_privato", callback=lambda:chiama_privato(True), width=70)
                             dpg.add_button(label="Videochiama", tag="btn_videochiama_privato", callback=lambda:videochiama_privato(True), width=90)
@@ -2500,8 +2541,8 @@ def mostra_finestra_chiamata(risposta):
                             modal=True, width=window_width, height=window_height,
                             pos=window_pos, no_resize=True, no_close=True):
                 dpg.add_spacer(height=10)
-                dpg.add_text(message, color=[255, 100, 100])
-                dpg.add_text(details, wrap=280)
+                dpg.add_text(message, color=[0, 50, 50])
+                dpg.add_text(details, wrap=280, color=[0, 0, 0])
                 dpg.add_spacer(height=20)
 
                 # Centra il pulsante
@@ -2563,7 +2604,7 @@ def mostra_finestra_chiamata(risposta):
                 with dpg.group(horizontal=True):
                     # Video locale
                     with dpg.group():
-                        dpg.add_text("Tu", color=[200, 200, 200])
+                        dpg.add_text("Tu", color=[0, 0, 0])
                         dpg.add_image(texture_tag="texture_mittente", tag="video_mittente", width=320, height=240)
 
                     # Piccolo spazio tra i video
@@ -2571,13 +2612,13 @@ def mostra_finestra_chiamata(risposta):
 
                     # Video remoto
                     with dpg.group():
-                        dpg.add_text(f"{utente_in_chiamata}", color=[200, 200, 200])
+                        dpg.add_text(f"{utente_in_chiamata}", color=[0, 0, 0])
                         dpg.add_image(texture_tag="texture_destinatario", tag="video_destinatario", width=320,
                                       height=240)
 
             # Aggiungi informazioni sulla chiamata
-            dpg.add_text(f"In chiamata con: {utente_in_chiamata}", color=[255, 255, 255])
-            dpg.add_text("Stato: Connesso", color=[100, 255, 100])
+            dpg.add_text(f"In chiamata con: {utente_in_chiamata}", color=[0, 0, 0])
+            dpg.add_text("Stato: Connesso", color=[50, 0, 50])
             dpg.add_separator()
 
             # Controlli della chiamata con pulsanti più grandi e proporzionati
@@ -2586,16 +2627,16 @@ def mostra_finestra_chiamata(risposta):
             # Calcola dimensioni pulsanti in base alla finestra
             if is_video:
                 button_count = 3  # Termina, Video, Audio
-                button_width = 190  # Pulsanti più grandi
-                button_height = 50  # Altezza aumentata
-                spacing = 20
+                button_width = 170  # Pulsanti più grandi
+                button_height = 40  # Altezza aumentata
+                spacing = 10
                 total_width = button_count * button_width + (button_count - 1) * spacing
                 left_margin = (call_window_width - total_width) // 2
             else:
                 button_count = 2  # Termina, Audio
-                button_width = 190  # Pulsanti più grandi
-                button_height = 50  # Altezza aumentata
-                spacing = 20
+                button_width = 170  # Pulsanti più grandi
+                button_height = 40  # Altezza aumentata
+                spacing = 10
                 total_width = button_count * button_width + (button_count - 1) * spacing
                 left_margin = (call_window_width - total_width) // 2
 
@@ -2616,9 +2657,6 @@ def mostra_finestra_chiamata(risposta):
                                callback=termina_chiamata)
                 dpg.bind_item_theme(dpg.last_item(), termina_theme)
 
-                # Spazio tra i pulsanti
-                dpg.add_spacer(width=spacing)
-
                 # Pulsante Video (blu) - solo per videochiamate
                 if is_video:
                     with dpg.theme() as video_theme:
@@ -2632,9 +2670,6 @@ def mostra_finestra_chiamata(risposta):
                     dpg.add_button(label=video_label, tag="btn_video", width=button_width, height=button_height,
                                    callback=attiva_disattiva_video)
                     dpg.bind_item_theme(dpg.last_item(), video_theme)
-
-                    # Spazio tra i pulsanti
-                    dpg.add_spacer(width=spacing)
 
                 # Pulsante Audio (verde)
                 with dpg.theme() as audio_theme:
@@ -3404,7 +3439,7 @@ def mostra_aggiungi_contatti():
 
     with dpg.window(label="Aggiungi contatto", tag="finestra_aggiungi_contatto",
                     modal=True, width=300, height=400):
-        dpg.add_text("Utenti disponibili:")
+        dpg.add_text("Utenti disponibili:", color=[0, 0, 0])
         dpg.add_separator()
 
         with dpg.child_window(tag="lista_utenti_disponibili", height=300, width=-1):
@@ -3435,6 +3470,9 @@ def mostra_aggiungi_contatti():
 
 # Creazione dell'interfaccia
 create_gui()
+
+light_theme = setup_light_theme()
+dpg.bind_theme(light_theme)
 
 # Aggiungi la callback per il ridimensionamento della viewport
 dpg.set_viewport_resize_callback(center_items)
